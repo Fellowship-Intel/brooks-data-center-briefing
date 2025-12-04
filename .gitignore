@@ -28,8 +28,10 @@ output.txt
 # Secrets directory
 .secrets/
 
-# JSON files
+# JSON files (but allow package.json and package-lock.json)
 *.json
+!package.json
+!package-lock.json
 
 # Editor directories and files
 .vscode/*
