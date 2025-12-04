@@ -1,0 +1,5 @@
+# Minimal requirements for local terminal version only
+# Does not include streamlit or pyarrow (not needed for terminal version)
+google-generativeai>=0.3.0
+python-dotenv>=1.0.0
+
