@@ -1,0 +1,30 @@
+[theme]
+# Primary accent color (green)
+primaryColor = "#10b981"
+# Main background (dark slate)
+backgroundColor = "#0f172a"
+# Secondary background (lighter slate for cards/containers)
+secondaryBackgroundColor = "#1e293b"
+# Text color (light gray)
+textColor = "#f1f5f9"
+# Font family
+font = "sans serif"
+
+[server]
+headless = true
+port = 8080
+enableCORS = true
+enableXsrfProtection = false  # Disable if not needed - speeds up requests
+# Allow file uploads
+maxUploadSize = 200
+runOnSave = false  # Don't auto-reload on file changes - faster startup
+fileWatcherType = "none"  # Disable file watching - faster startup
+
+[browser]
+gatherUsageStats = false
+serverAddress = "localhost"
+
+[runner]
+fastReruns = true  # Enable fast reruns
+magicEnabled = false  # Disable magic commands if not using them
+

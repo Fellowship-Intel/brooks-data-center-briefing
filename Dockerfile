@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+# Install system deps (optional but handy for many libs)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python deps
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the code
+COPY . .
+
+# Make entrypoint script executable
+RUN chmod +x docker-entrypoint.sh
+
+# Cloud Run expects the service to listen on $PORT (default 8080)
+ENV PORT=8080
+
+# Use entrypoint script to handle PORT variable correctly
+ENTRYPOINT ["./docker-entrypoint.sh"]

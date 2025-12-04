@@ -1,0 +1,74 @@
+# This file specifies files that are *not* uploaded to Google Cloud
+# using gcloud. It follows the same syntax as .gitignore
+
+.gcloudignore
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+tests/
+*.test.py
+*_test.py
+
+# Documentation
+*.md
+!README.md
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Secrets
+.secrets/
+*.json
+!package.json
+!package-lock.json
+
+# Node modules (if any)
+node_modules/
+
+# Static files (if not needed in container)
+static/
+templates/
+
+# Other project files
+*.ts
+*.tsx
+*.jsx
+components/
+services/
+tsconfig.json
+vite.config.ts
+vercel.json
+

@@ -1,0 +1,27 @@
+# Dockerfile for FastAPI API service
+FROM python:3.11-slim
+
+# Install system deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python deps
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy only the code needed for the API
+COPY python_app/ ./python_app/
+COPY app/ ./app/
+COPY gcp_clients.py report_repository.py report_service.py settings.py ./
+COPY tts/ ./tts/
+
+# Cloud Run expects the service to listen on $PORT (default 8000)
+ENV PORT=8000
+
+# Default command: start FastAPI with uvicorn
+# Note: Cloud Run will override this with --command and --args
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+
