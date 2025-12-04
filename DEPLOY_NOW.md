@@ -14,7 +14,7 @@ git commit -m "Ready for web deployment"
 git branch -M main
 
 # Add your GitHub repo (create one at github.com if needed)
-git remote add origin https://github.com/yourusername/your-repo-name.git
+git remote add origin https://github.com/Fellowship-Intel/brooks-data-center-briefing.git
 git push -u origin main
 ```
 
