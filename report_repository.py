@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, asdict
 
 from google.cloud import firestore
 from gcp_clients import get_firestore_client
+from utils.cache_utils import cache_firestore_query, _memory_cache_instance, _generate_cache_key
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +104,7 @@ class TickerSummary:
 # Repository Functions
 # ---------------------------------------------------------------------------
 
+@cache_firestore_query(ttl_seconds=600)  # Cache for 10 minutes
 def get_client(client_id: str) -> Optional[Dict[str, Any]]:
     """
     Fetch a client document from Firestore.
@@ -155,6 +157,10 @@ def upsert_client(
         data["preferences"] = preferences
     
     doc_ref.set(data)
+    
+    # Invalidate cache for this client_id
+    cache_key = _generate_cache_key("firestore_get_client", client_id)
+    _memory_cache_instance.delete(cache_key)
 
 
 def create_or_update_daily_report(report: Dict[str, Any]) -> None:
@@ -212,8 +218,13 @@ def create_or_update_daily_report(report: Dict[str, Any]) -> None:
         data["raw_payload"] = report["raw_payload"]
     
     doc_ref.set(data)
+    
+    # Invalidate cache for this trading_date
+    cache_key = _generate_cache_key("firestore_get_daily_report", trading_date)
+    _memory_cache_instance.delete(cache_key)
 
 
+@cache_firestore_query(ttl_seconds=300)  # Cache for 5 minutes
 def get_daily_report(trading_date: str) -> Optional[Dict[str, Any]]:
     """
     Fetch a daily report document from Firestore.
@@ -236,6 +247,7 @@ def get_daily_report(trading_date: str) -> Optional[Dict[str, Any]]:
     return data
 
 
+@cache_firestore_query(ttl_seconds=180)  # Cache for 3 minutes (shorter since it's a list)
 def list_daily_reports(
     client_id: Optional[str] = None,
     limit: int = 50,
@@ -346,6 +358,10 @@ def update_daily_report_email_status(trading_date: str, status: str) -> None:
     db = get_firestore_client()
     doc_ref = db.collection("daily_reports").document(trading_date)
     doc_ref.update({"email_status": status})
+    
+    # Invalidate cache for this trading_date
+    cache_key = _generate_cache_key("firestore_get_daily_report", trading_date)
+    _memory_cache_instance.delete(cache_key)
 
 
 def update_daily_report_audio_path(trading_date: str, audio_gcs_path: str) -> None:
@@ -359,6 +375,10 @@ def update_daily_report_audio_path(trading_date: str, audio_gcs_path: str) -> No
     db = get_firestore_client()
     doc_ref = db.collection("daily_reports").document(trading_date)
     doc_ref.update({"audio_gcs_path": audio_gcs_path})
+    
+    # Invalidate cache for this trading_date
+    cache_key = _generate_cache_key("firestore_get_daily_report", trading_date)
+    _memory_cache_instance.delete(cache_key)
 
 
 def upsert_ticker_summary(

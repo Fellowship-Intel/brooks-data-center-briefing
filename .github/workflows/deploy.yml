@@ -19,10 +19,12 @@ on:
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   GCP_REGION: us-central1
+  REPO: brooks-reports-repo
 
 jobs:
-  deploy:
+  deploy-api:
     runs-on: ubuntu-latest
+    name: Deploy Node.js API
     
     steps:
       - name: Checkout code
@@ -35,7 +37,7 @@ jobs:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
       
       - name: Authenticate Docker
-        run: gcloud auth configure-docker
+        run: gcloud auth configure-docker ${GCP_REGION}-docker.pkg.dev
       
       - name: Determine environment
         id: env
@@ -48,22 +50,187 @@ jobs:
             echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
           fi
       
-      - name: Build Docker image
+      - name: Build and deploy API
         run: |
-          IMAGE_NAME="gcr.io/$PROJECT_ID/brooks-briefing:${{ steps.env.outputs.environment }}"
-          docker build -t $IMAGE_NAME .
-          docker push $IMAGE_NAME
-      
-      - name: Deploy to Cloud Run
-        run: |
-          SERVICE_NAME="brooks-briefing-${{ steps.env.outputs.environment }}"
-          gcloud run deploy $SERVICE_NAME \
-            --image gcr.io/$PROJECT_ID/brooks-briefing:${{ steps.env.outputs.environment }} \
-            --platform managed \
-            --region $GCP_REGION \
+          SERVICE_NAME="brooks-briefing-api-nodejs-${{ steps.env.outputs.environment }}"
+          IMAGE_NAME="${GCP_REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/brooks-api-nodejs:${{ steps.env.outputs.environment }}"
+          
+          # Build and submit Docker image
+          gcloud builds submit --tag "${IMAGE_NAME}" --file server/Dockerfile
+          
+          # Deploy to Cloud Run
+          gcloud run deploy ${SERVICE_NAME} \
+            --image="${IMAGE_NAME}" \
+            --platform=managed \
+            --region=${GCP_REGION} \
             --allow-unauthenticated \
-            --set-env-vars ENVIRONMENT=${{ steps.env.outputs.environment }} \
-            --memory 2Gi \
-            --cpu 2 \
-            --timeout 300 \
-            --max-instances 10
+            --cpu=1 \
+            --memory=1Gi \
+            --port=8000 \
+            --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},REPORTS_BUCKET_NAME=${{ secrets.REPORTS_BUCKET_NAME }},ENVIRONMENT=${{ steps.env.outputs.environment }}" \
+            --update-secrets="GEMINI_API_KEY=GEMINI_API_KEY:latest,ELEVEN_LABS_API_KEY=ELEVEN_LABS_API_KEY:latest" \
+            --service-account="brooks-briefing-api-nodejs@${PROJECT_ID}.iam.gserviceaccount.com" \
+            --min-instances=0 \
+            --max-instances=10
+      
+      - name: Get API URL
+        id: api-url
+        run: |
+          SERVICE_NAME="brooks-briefing-api-nodejs-${{ steps.env.outputs.environment }}"
+          API_URL=$(gcloud run services describe ${SERVICE_NAME} --region=${GCP_REGION} --format='value(status.url)')
+          echo "url=${API_URL}" >> $GITHUB_OUTPUT
+          echo "API URL: ${API_URL}"
+
+  deploy-react:
+    runs-on: ubuntu-latest
+    name: Deploy React Frontend
+    needs: deploy-api
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+      
+      - name: Authenticate Docker
+        run: gcloud auth configure-docker ${GCP_REGION}-docker.pkg.dev
+      
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/production" ]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+          else
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Build and deploy React
+        run: |
+          SERVICE_NAME="brooks-briefing-react-${{ steps.env.outputs.environment }}"
+          IMAGE_NAME="${GCP_REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/brooks-react:${{ steps.env.outputs.environment }}"
+          API_URL="${{ needs.deploy-api.outputs.url }}"
+          
+          # Build and submit Docker image with API URL
+          gcloud builds submit --tag "${IMAGE_NAME}" \
+            --file Dockerfile.react \
+            --substitutions=_VITE_API_URL="${API_URL}"
+          
+          # Deploy to Cloud Run
+          gcloud run deploy ${SERVICE_NAME} \
+            --image="${IMAGE_NAME}" \
+            --platform=managed \
+            --region=${GCP_REGION} \
+            --allow-unauthenticated \
+            --cpu=1 \
+            --memory=512Mi \
+            --port=80 \
+            --min-instances=0 \
+            --max-instances=10
+      
+      - name: Get React URL
+        id: react-url
+        run: |
+          SERVICE_NAME="brooks-briefing-react-${{ steps.env.outputs.environment }}"
+          REACT_URL=$(gcloud run services describe ${SERVICE_NAME} --region=${GCP_REGION} --format='value(status.url)')
+          echo "url=${REACT_URL}" >> $GITHUB_OUTPUT
+          echo "React URL: ${REACT_URL}"
+
+  deploy-streamlit:
+    runs-on: ubuntu-latest
+    name: Deploy Streamlit UI
+    needs: deploy-api
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+      
+      - name: Authenticate Docker
+        run: gcloud auth configure-docker ${GCP_REGION}-docker.pkg.dev
+      
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/production" ]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+          else
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Build and deploy Streamlit
+        run: |
+          SERVICE_NAME="brooks-briefing-ui-${{ steps.env.outputs.environment }}"
+          IMAGE_NAME="${GCP_REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/brooks-ui:${{ steps.env.outputs.environment }}"
+          API_URL="${{ needs.deploy-api.outputs.url }}"
+          
+          # Build and submit Docker image
+          gcloud builds submit --tag "${IMAGE_NAME}" --file Dockerfile.ui
+          
+          # Deploy to Cloud Run
+          gcloud run deploy ${SERVICE_NAME} \
+            --image="${IMAGE_NAME}" \
+            --platform=managed \
+            --region=${GCP_REGION} \
+            --allow-unauthenticated \
+            --cpu=1 \
+            --memory=1Gi \
+            --port=8501 \
+            --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},REPORTS_BUCKET_NAME=${{ secrets.REPORTS_BUCKET_NAME }},API_URL=${API_URL}" \
+            --command="streamlit" \
+            --args="run,app.py,--server.port=8501,--server.address=0.0.0.0" \
+            --min-instances=0 \
+            --max-instances=10
+      
+      - name: Get Streamlit URL
+        id: streamlit-url
+        run: |
+          SERVICE_NAME="brooks-briefing-ui-${{ steps.env.outputs.environment }}"
+          STREAMLIT_URL=$(gcloud run services describe ${SERVICE_NAME} --region=${GCP_REGION} --format='value(status.url)')
+          echo "url=${STREAMLIT_URL}" >> $GITHUB_OUTPUT
+          echo "Streamlit URL: ${STREAMLIT_URL}"
+
+  update-cors:
+    runs-on: ubuntu-latest
+    name: Update CORS Configuration
+    needs: [deploy-api, deploy-react, deploy-streamlit]
+    
+    steps:
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+      
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/production" ]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+          else
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Update API CORS
+        run: |
+          SERVICE_NAME="brooks-briefing-api-nodejs-${{ steps.env.outputs.environment }}"
+          REACT_URL="${{ needs.deploy-react.outputs.url }}"
+          STREAMLIT_URL="${{ needs.deploy-streamlit.outputs.url }}"
+          
+          gcloud run services update ${SERVICE_NAME} \
+            --region=${GCP_REGION} \
+            --set-env-vars="REACT_APP_URL=${REACT_URL},STREAMLIT_APP_URL=${STREAMLIT_URL}"

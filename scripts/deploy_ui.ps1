@@ -25,14 +25,20 @@ gcloud builds submit --tag "${IMAGE_UI}" --file Dockerfile.ui
 Write-Host ""
 Write-Host "🚀 Deploying to Cloud Run..." -ForegroundColor Cyan
 
-# Get API service URL if it exists
-$API_URL = gcloud run services describe brooks-briefing-api --region ${REGION} --format 'value(status.url)' 2>$null
+# Get Node.js API service URL if it exists
+$API_URL = gcloud run services describe brooks-briefing-api-nodejs --region ${REGION} --format 'value(status.url)' 2>$null
+if (-not $API_URL) {
+    # Fallback to old API service name
+    $API_URL = gcloud run services describe brooks-briefing-api --region ${REGION} --format 'value(status.url)' 2>$null
+}
 $REPORTS_BUCKET = if ($env:REPORTS_BUCKET_NAME) { $env:REPORTS_BUCKET_NAME } else { "mikebrooks-reports" }
 
 $envVars = "GCP_PROJECT_ID=${PROJECT_ID},REPORTS_BUCKET_NAME=${REPORTS_BUCKET}"
 if ($API_URL) {
     Write-Host "📡 Found API service at: ${API_URL}" -ForegroundColor Cyan
     $envVars = "${envVars},API_URL=${API_URL}"
+} else {
+    Write-Host "⚠️  Warning: API service not found. Streamlit will use default API URL." -ForegroundColor Yellow
 }
 
 gcloud run deploy ${SERVICE_NAME} `

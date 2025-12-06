@@ -59,6 +59,13 @@ from python_app.utils.json_parser import parse_gemini_json_response
 from utils.cache_utils import cache_gemini_response
 from utils.retry_utils import retry_on_api_error, retry_with_backoff
 from utils.metrics import time_operation, increment_counter
+from utils.exceptions import (
+    ReportGenerationError,
+    TTSGenerationError,
+    StorageError,
+    APIError,
+    ConfigurationError,
+)
 
 # Initialize error tracking (optional, fails gracefully if not configured)
 try:
@@ -74,46 +81,27 @@ except ImportError:
 # Configuration
 # ---------------------------------------------------------------------------
 
-def _get_config() -> dict:
-    """Load configuration from environment variables."""
+def _get_config() -> Dict[str, str]:
+    """Load configuration from centralized config."""
+    from config import get_config
+    config = get_config()
     return {
-        "project_id": os.getenv("GCP_PROJECT_ID", "mikebrooks"),
-        "reports_bucket_name": os.getenv("REPORTS_BUCKET_NAME", "mikebrooks-reports"),
-        "gemini_model_name": os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro"),
+        "project_id": config.gcp_project_id,
+        "reports_bucket_name": config.reports_bucket_name,
+        "gemini_model_name": config.gemini_model_name,
     }
 
 
-def _get_gemini_api_key() -> str:
-    """Retrieve Gemini API key from Secret Manager."""
-    try:
-        return access_secret_value("GEMINI_API_KEY")
-    except Exception as e:
-        raise RuntimeError(f"Failed to retrieve GEMINI_API_KEY from Secret Manager: {e}")
-
-
-def _configure_gemini_client() -> None:
+def _get_gemini_client() -> genai.GenerativeModel:
     """
-    Configure the google-generativeai client using GEMINI_API_KEY from Secret Manager.
-
-    Safe to call multiple times; configuration is idempotent.
-    """
-    api_key = access_secret_value("GEMINI_API_KEY")
-    genai.configure(api_key=api_key)
-
-
-def _get_gemini_client():
-    """
-    Get a configured Gemini client using API key from Secret Manager.
-    
-    Uses _configure_gemini_client() to configure google-generativeai.
+    Get a configured Gemini client using shared client utility.
     
     Returns:
         Configured google.generativeai.GenerativeModel instance
     """
-    _configure_gemini_client()
-    
+    from python_app.services.gemini_client import create_gemini_model
     config = _get_config()
-    return genai.GenerativeModel(model_name=config["gemini_model_name"])
+    return create_gemini_model(model_name=config["gemini_model_name"])
 
 
 def _synthesize_audio_with_gemini(text: str, model_name: str | None = None) -> bytes:
@@ -132,7 +120,11 @@ def _synthesize_audio_with_gemini(text: str, model_name: str | None = None) -> b
         RuntimeError: If audio generation fails or the API doesn't support audio output.
     """
     if not text or not text.strip():
-        raise ValueError("Input text must not be empty")
+        raise TTSGenerationError(
+            "Input text must not be empty",
+            provider="gemini",
+            text_length=0
+        )
 
     _configure_gemini_client()
 
@@ -182,20 +174,26 @@ def _synthesize_audio_with_gemini(text: str, model_name: str | None = None) -> b
 
         # If we get here, the response doesn't contain audio in expected format
         # This may indicate the model doesn't support audio output
-        raise RuntimeError(
+        raise TTSGenerationError(
             f"Gemini model '{model_name}' did not return audio content. "
-            "The model may not support audio output, or the API response format has changed. "
-            f"Response type: {type(response)}, available attributes: {dir(response)}"
+            "The model may not support audio output, or the API response format has changed.",
+            provider="gemini",
+            context={
+                "response_type": str(type(response)),
+                "available_attributes": dir(response)
+            }
         )
 
     except Exception as e:
         # Provide helpful error message
         if isinstance(e, RuntimeError):
             raise
-        raise RuntimeError(
+        raise TTSGenerationError(
             f"Failed to generate audio with Gemini: {e}. "
             "Note: Gemini API may not support direct audio/TTS output. "
-            "Consider using Google Cloud Text-to-Speech API as an alternative."
+            "Consider using Google Cloud Text-to-Speech API as an alternative.",
+            provider="gemini",
+            context={"original_error": str(e)}
         ) from e
 
 
@@ -292,9 +290,11 @@ def _generate_report_text(
 
     if not response.text:
         logger.error("Gemini returned empty response for trading_date=%s", trading_date)
-        raise RuntimeError(
+        raise ReportGenerationError(
             f"Gemini returned empty response for trading date {trading_date}. "
-            "This may indicate an API issue or model error."
+            "This may indicate an API issue or model error.",
+            trading_date=trading_date,
+            context={"component": "gemini_text_generation"}
         )
 
     # Parse JSON response using enhanced parser
@@ -308,14 +308,20 @@ def _generate_report_text(
                 context={"prompt_length": len(prompt)}
             )
         logger.error("JSON parsing failed for trading_date=%s: %s", trading_date, str(e))
-        raise RuntimeError(f"Failed to parse Gemini response: {e}")
+        raise ReportGenerationError(
+            f"Failed to parse Gemini response: {e}",
+            context={"component": "gemini_json_parsing", "original_error": str(e)}
+        )
 
     # Validate required fields
     required_fields = ["summary_text", "key_insights"]
     for field in required_fields:
         if field not in report_data:
             logger.error("Missing required field '%s' in response for trading_date=%s", field, trading_date)
-            raise RuntimeError(f"Gemini response missing required field: {field}")
+            raise ReportGenerationError(
+                f"Gemini response missing required field: {field}",
+                context={"component": "gemini_validation", "missing_field": field}
+            )
 
     logger.debug("Successfully parsed Gemini response for trading_date=%s", trading_date)
     return report_data
@@ -517,7 +523,11 @@ def get_audio_bytes_from_gcs(gcs_uri: str) -> bytes:
     parsed = urlparse(gcs_uri)
     if parsed.scheme != "gs":
         logger.error("Invalid GCS URI for audio: %s", gcs_uri)
-        raise ValueError(f"Expected gs:// URI, got: {gcs_uri}")
+        raise StorageError(
+            f"Expected gs:// URI, got: {gcs_uri}",
+            operation="validate_uri",
+            resource=gcs_uri
+        )
 
     bucket_name = parsed.netloc
     blob_path = parsed.path.lstrip("/")
@@ -535,10 +545,10 @@ def get_audio_bytes_from_gcs(gcs_uri: str) -> bytes:
 
 def generate_and_store_daily_report(
     trading_date: date,
-    client_id: str,
-    market_data: Dict[str, Any],
-    news_items: Dict[str, Any],
-    macro_context: Dict[str, Any],
+    client_id: Optional[str] = None,
+    market_data: Dict[str, Any] = None,
+    news_items: Dict[str, Any] = None,
+    macro_context: Dict[str, Any] = None,
 ) -> Dict[str, Any]:
     """
     Orchestrates a full daily report for a given client and trading date.
@@ -547,6 +557,15 @@ def generate_and_store_daily_report(
     - Attempts audio via Gemini TTS (but does NOT fail the whole pipeline if TTS fails)
     - Stores audio file in Cloud Storage and updates Firestore with the GCS path if successful
     """
+    from config import get_config
+    if client_id is None:
+        client_id = get_config().default_client_id
+    if market_data is None:
+        market_data = {}
+    if news_items is None:
+        news_items = {}
+    if macro_context is None:
+        macro_context = {}
     # 1. Generate text with Gemini (with performance tracking)
     logger.info("Generating report text for client=%s date=%s", client_id, trading_date.isoformat())
     with time_operation("report_generation.gemini_text", tags={"client_id": client_id}):
@@ -714,7 +733,7 @@ def generate_for_michael_brooks(
     macro_context: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Convenience wrapper that assumes client_id='michael_brooks'.
+    Convenience wrapper that uses default client_id from configuration.
 
     Calls generate_and_store_daily_report(...) under the hood.
 
@@ -729,7 +748,7 @@ def generate_for_michael_brooks(
     """
     return generate_and_store_daily_report(
         trading_date=trading_date,
-        client_id="michael_brooks",
+        client_id=None,  # Will use default from config
         market_data=market_data,
         news_items=news_items,
         macro_context=macro_context,

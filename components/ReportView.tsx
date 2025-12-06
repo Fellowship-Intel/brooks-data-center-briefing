@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { DailyReportResponse, MarketData, MiniReport } from '../types';
 import AudioPlayer from './AudioPlayer';
-import { ArrowUpRight, ArrowDownRight, Activity, BarChart2, Layers, Star } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { Star } from 'lucide-react';
+import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { logger } from '../utils/logger';
 
 interface ReportViewProps {
   data: DailyReportResponse;
@@ -19,7 +20,7 @@ const ReportView: React.FC<ReportViewProps> = ({ data, marketData }) => {
         const saved = localStorage.getItem('brooks_watchlist');
         return saved ? JSON.parse(saved) : [];
     } catch (e) {
-        console.error("Failed to load watchlist", e);
+        logger.error("Failed to load watchlist", e);
         return [];
     }
   });
@@ -96,22 +97,30 @@ const ReportView: React.FC<ReportViewProps> = ({ data, marketData }) => {
         {activeTab === 'brief' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             {/* Chart Section */}
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
+            {topMoversData.length > 0 ? (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Volume Leaders vs Avg</h3>
-                <div className="h-48 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={topMoversData}>
-                            <XAxis dataKey="ticker" tick={{fill: '#94a3b8', fontSize: 10}} axisLine={false} tickLine={false} />
-                            <Tooltip 
-                                contentStyle={{backgroundColor: '#0f172a', borderColor: '#334155', color: '#f1f5f9'}}
-                                cursor={{fill: 'rgba(255,255,255,0.05)'}}
-                            />
-                            <Bar dataKey="volume" fill="#10b981" radius={[4, 4, 0, 0]} />
-                             <Bar dataKey="average_volume" fill="#334155" radius={[4, 4, 0, 0]} />
-                        </BarChart>
-                    </ResponsiveContainer>
+                <div className="h-48 w-full min-w-0">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+                    <BarChart data={topMoversData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+                      <XAxis dataKey="ticker" tick={{fill: '#94a3b8', fontSize: 10}} axisLine={false} tickLine={false} />
+                      <Tooltip 
+                        contentStyle={{backgroundColor: '#0f172a', borderColor: '#334155', color: '#f1f5f9'}}
+                        cursor={{fill: 'rgba(255,255,255,0.05)'}}
+                      />
+                      <Bar dataKey="volume" fill="#10b981" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="average_volume" fill="#334155" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
-            </div>
+              </div>
+            ) : (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-sm text-center">
+                <div className="text-4xl mb-3">📈</div>
+                <h3 className="text-sm font-semibold text-slate-400 mb-1">No Market Data Available</h3>
+                <p className="text-xs text-slate-500">Market data is required to display volume charts.</p>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {data.reports && data.reports.length > 0 ? (
@@ -126,9 +135,11 @@ const ReportView: React.FC<ReportViewProps> = ({ data, marketData }) => {
                              <button
                                 onClick={() => toggleWatchlist(report.ticker)}
                                 className={`transition-all duration-200 p-1 rounded hover:bg-slate-800 ${isWatched ? 'text-yellow-400' : 'text-slate-600 hover:text-yellow-400'}`}
+                                aria-label={isWatched ? `Remove ${report.ticker} from watchlist` : `Add ${report.ticker} to watchlist`}
+                                aria-pressed={isWatched}
                                 title={isWatched ? "Remove from Watchlist" : "Add to Watchlist"}
                              >
-                                <Star size={16} fill={isWatched ? "currentColor" : "none"} />
+                                <Star size={16} fill={isWatched ? "currentColor" : "none"} aria-hidden="true" />
                              </button>
                           </div>
                           <p className="text-xs text-slate-400 truncate max-w-[150px]">{report.company_name}</p>
@@ -173,8 +184,23 @@ const ReportView: React.FC<ReportViewProps> = ({ data, marketData }) => {
                   );
                 })
               ) : (
-                <div className="col-span-full text-center py-10 text-slate-500">
-                  <p>No ticker reports generated. Please check inputs.</p>
+                <div className="col-span-full">
+                  <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-xl p-12 border border-slate-700 text-center shadow-lg">
+                    <div className="max-w-md mx-auto space-y-4">
+                      <div className="text-6xl mb-4">📊</div>
+                      <h3 className="text-xl font-bold text-slate-300">No Ticker Reports Available</h3>
+                      <p className="text-slate-400">
+                        The report was generated but no individual ticker reports were included. 
+                        This may happen if the market data or inputs were incomplete.
+                      </p>
+                      <div className="mt-6 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                        <p className="text-sm text-slate-400">
+                          <strong className="text-slate-300">Tip:</strong> Ensure you provide market data with ticker information, 
+                          or check that the AI was able to generate ticker-specific insights.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -184,18 +210,34 @@ const ReportView: React.FC<ReportViewProps> = ({ data, marketData }) => {
         {/* TAB: DEEP DIVE */}
         {activeTab === 'deep-dive' && (
           <div className="max-w-4xl mx-auto bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-lg animate-in fade-in slide-in-from-bottom-4 duration-500">
-             <div className="prose prose-invert prose-slate max-w-none prose-headings:text-emerald-400 prose-a:text-emerald-400 hover:prose-a:text-emerald-300">
+            {data.core_tickers_in_depth_markdown && data.core_tickers_in_depth_markdown.trim() ? (
+              <div className="prose prose-invert prose-slate max-w-none prose-headings:text-emerald-400 prose-a:text-emerald-400 hover:prose-a:text-emerald-300">
                 <ReactMarkdown>{data.core_tickers_in_depth_markdown}</ReactMarkdown>
-             </div>
+              </div>
+            ) : (
+              <div className="text-center py-12">
+                <div className="text-5xl mb-4">🔍</div>
+                <h3 className="text-lg font-semibold text-slate-300 mb-2">Deep Dive Content Not Available</h3>
+                <p className="text-slate-400">The deep dive section was not included in this report.</p>
+              </div>
+            )}
           </div>
         )}
 
         {/* TAB: FULL NARRATIVE */}
         {activeTab === 'full' && (
           <div className="max-w-4xl mx-auto bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-lg animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="prose prose-invert prose-slate max-w-none prose-headings:text-emerald-400">
+            {data.report_markdown && data.report_markdown.trim() ? (
+              <div className="prose prose-invert prose-slate max-w-none prose-headings:text-emerald-400">
                 <ReactMarkdown>{data.report_markdown}</ReactMarkdown>
-            </div>
+              </div>
+            ) : (
+              <div className="text-center py-12">
+                <div className="text-5xl mb-4">📝</div>
+                <h3 className="text-lg font-semibold text-slate-300 mb-2">Full Narrative Not Available</h3>
+                <p className="text-slate-400">The full narrative report was not included in this response.</p>
+              </div>
+            )}
           </div>
         )}
       </div>

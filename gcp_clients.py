@@ -77,16 +77,13 @@ def _check_credentials() -> None:
 # Project / credentials resolution
 # ---------------------------------------------------------------------------
 
-DEFAULT_PROJECT_ID = "mikebrooks"
-
-
 def get_project_id() -> str:
     """
     Resolve the active GCP project ID.
 
     Priority:
     1. GCP_PROJECT_ID environment variable
-    2. A default project id constant set to "mikebrooks"
+    2. Centralized configuration default
 
     Returns:
         The resolved project ID as a string.
@@ -94,7 +91,9 @@ def get_project_id() -> str:
     Raises:
         RuntimeError: If no project ID can be resolved.
     """
-    project_id = os.getenv("GCP_PROJECT_ID", DEFAULT_PROJECT_ID)
+    from config import get_config
+    config = get_config()
+    project_id = os.getenv("GCP_PROJECT_ID", config.gcp_project_id)
     if not project_id:
         raise RuntimeError(
             "GCP_PROJECT_ID is not set and no default project ID is defined."

@@ -1,10 +1,14 @@
 import os
 import json
-import re
 from typing import Optional, List, Dict, Any, Union
 import google.generativeai as genai
 from python_app.types import DailyReportResponse, InputData, MiniReport, MarketData, NewsItem
 from python_app.utils import market_data_to_dict, news_item_to_dict
+from python_app.services.gemini_client import (
+    initialize_gemini,
+    create_gemini_model,
+)
+from python_app.utils.json_parser import parse_gemini_json_response as parse_json_response
 from gcp_clients import get_bucket
 
 
@@ -14,53 +18,8 @@ _is_json_mode = False
 
 
 def initialize_ai() -> None:
-    """Initialize the Gemini AI client."""
-    # Priority 1: Try service account credentials (for GCP service accounts)
-    # Note: Gemini API may require API key even with service accounts
-    google_creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    
-    if google_creds and os.path.exists(google_creds):
-        try:
-            # Try to use service account authentication
-            import google.auth
-            from google.auth.transport.requests import Request
-            
-            credentials, project = google.auth.default()
-            
-            # Refresh credentials to get a valid token
-            credentials.refresh(Request())
-            
-            # Try to configure with credentials (may not be supported by all Gemini API versions)
-            try:
-                genai.configure(credentials=credentials)
-                return
-            except (TypeError, AttributeError):
-                # If credentials parameter not supported, fall through to API key
-                pass
-        except Exception as e:
-            # Silently fall back to API key if service account auth fails
-            pass
-    
-    # Priority 2: Try Streamlit secrets first (for Streamlit Cloud), then environment variables
-    api_key = None
-    try:
-        import streamlit as st  # type: ignore
-        api_key = st.secrets.get("GEMINI_API_KEY") or st.secrets.get("API_KEY")
-    except (ImportError, AttributeError, FileNotFoundError):
-        # Streamlit not available, continue to next option
-        pass
-    
-    # Priority 3: Fall back to environment variables
-    if not api_key:
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY")
-    
-    if not api_key:
-        raise ValueError(
-            "GEMINI_API_KEY or API_KEY must be set in Streamlit secrets or environment variables. "
-            "Note: Gemini API requires an API key even when using service account credentials for other GCP services."
-        )
-    
-    genai.configure(api_key=api_key)
+    """Initialize the Gemini AI client (delegates to shared client)."""
+    initialize_gemini()
 
 
 def generate_daily_report(input_data: InputData) -> DailyReportResponse:
@@ -140,13 +99,12 @@ def generate_daily_report(input_data: InputData) -> DailyReportResponse:
     
     from python_app.constants import SYSTEM_INSTRUCTION
     
-    # Create a new model with system instruction and tools
+    # Create a new model with system instruction using shared client
     # Note: Google Search tool availability depends on API access and model version
     # Check Google AI Studio for available tools: https://ai.google.dev/
-    model = genai.GenerativeModel(
+    model = create_gemini_model(
         model_name='gemini-2.0-flash-exp',  # Update model name as needed
         system_instruction=SYSTEM_INSTRUCTION
-        # tools parameter may vary - check latest API docs for Google Search integration
     )
     
     # Start a new chat session
@@ -198,7 +156,7 @@ def generate_daily_report(input_data: InputData) -> DailyReportResponse:
         raise ValueError(f"Invalid JSON response from model: {str(e)}\nResponse: {text[:500]}")
 
 
-def _call_gemini_for_report(prompt: str, model_name: str | None = None) -> dict:
+def _call_gemini_for_report(prompt: str, model_name: Optional[str] = None) -> Dict[str, Any]:
     """
     Calls Gemini with the given prompt and returns a structured result dict:
     
@@ -247,8 +205,8 @@ The JSON object must strictly adhere to this schema:
     
     from python_app.constants import SYSTEM_INSTRUCTION
     
-    # Create a model with system instruction
-    model = genai.GenerativeModel(
+    # Create a model with system instruction using shared client
+    model = create_gemini_model(
         model_name=model_name,
         system_instruction=SYSTEM_INSTRUCTION
     )
@@ -262,22 +220,9 @@ The JSON object must strictly adhere to this schema:
     if not text:
         raise ValueError("No response from Gemini")
     
-    # CLEANUP: Remove common markdown fences if present
-    text = re.sub(r'```json', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'```', '', text).strip()
-    
-    # ROBUST JSON EXTRACTION
-    # Find the first '{' and the last '}' to extract the JSON object
-    start = text.find('{')
-    end = text.rfind('}')
-    
-    if start != -1 and end != -1:
-        text = text[start:end + 1]
-    else:
-        raise ValueError(f"Model response did not contain a valid JSON object: {text[:500]}")
-    
+    # Use shared JSON parsing utility
     try:
-        data = json.loads(text)
+        data = parse_json_response(text)
         
         # Extract and validate required fields
         summary_text = data.get('summary_text', '')
@@ -301,8 +246,9 @@ The JSON object must strictly adhere to this schema:
             "key_insights": key_insights,
             "market_context": market_context
         }
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON response from model: {str(e)}\nResponse: {text[:500]}")
+    except Exception as e:
+        # parse_json_response already raises APIError with proper context
+        raise
 
 
 def _store_report_audio_in_gcs(trading_date: str, audio_bytes: bytes) -> str:

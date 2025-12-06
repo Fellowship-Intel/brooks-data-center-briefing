@@ -168,3 +168,31 @@ class APIError(Exception):
             parts.append(f"status={self.status_code}")
         return " | ".join(parts)
 
+
+class ValidationError(Exception):
+    """Raised when input validation fails."""
+    
+    def __init__(
+        self,
+        message: str,
+        field: Optional[str] = None,
+        value: Optional[Any] = None,
+    ):
+        """
+        Initialize validation error.
+        
+        Args:
+            message: Error message
+            field: Field name that failed validation
+            value: Value that failed validation
+        """
+        super().__init__(message)
+        self.field = field
+        self.value = value
+    
+    def __str__(self) -> str:
+        """Format error message with context."""
+        parts = [super().__str__()]
+        if self.field:
+            parts.append(f"field={self.field}")
+        return " | ".join(parts)

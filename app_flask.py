@@ -1,5 +1,11 @@
 """
-Flask web application for Brooks Data Center Daily Briefing
+DEPRECATED: Flask web application for Brooks Data Center Daily Briefing
+
+This Flask entry point is deprecated. Please use:
+- Streamlit UI: `streamlit run app.py` (recommended for desktop web app)
+- FastAPI API: `uvicorn app.main:app --reload` (for REST API access)
+
+This file is kept for backward compatibility but will be removed in a future version.
 """
 from flask import Flask, render_template, request, jsonify, session
 import json

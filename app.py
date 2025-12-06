@@ -5,7 +5,7 @@ import streamlit as st
 import json
 import sys
 import os
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import pandas as pd
@@ -20,9 +20,11 @@ if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
     if default_creds_path.exists():
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(default_creds_path)
 
-# Set default project ID if not set
+# Set default project ID if not set (use centralized config)
+from config import get_config
+_config = get_config()
 if not os.getenv("GCP_PROJECT_ID"):
-    os.environ["GCP_PROJECT_ID"] = "mikebrooks"
+    os.environ["GCP_PROJECT_ID"] = _config.gcp_project_id
 
 # Import heavy modules (cached by Python's import system after first load)
 import pandas as pd
@@ -35,12 +37,26 @@ from python_app.services.gemini_service import (
     generate_daily_report, send_chat_message
 )
 from python_app.utils import dict_to_market_data, dict_to_news_item
+from python_app.components.dashboard import render_dashboard
+from python_app.components.status_indicators import render_status_indicators
+from python_app.components.progress import create_progress_tracker
+from python_app.components.keyboard_shortcuts import render_keyboard_shortcuts_help
+from python_app.utils.api_client import (
+    generate_report as api_generate_report,
+    generate_watchlist_report as api_generate_watchlist_report,
+    send_chat_message as api_send_chat_message,
+)
 from report_service import (
     generate_watchlist_daily_report,
     get_daily_movers_for_watchlist,
     get_audio_bytes_from_gcs,
 )
+from utils.rate_limiter import (
+    _report_generation_limiter,
+    check_rate_limit,
+)
 from report_repository import get_daily_report
+from gcp_clients import get_firestore_client
 
 # Initialize error tracking (optional)
 try:
@@ -61,12 +77,17 @@ if not logger.handlers:
     )
 
 
-# Page configuration
+# Page configuration - optimized for desktop
 st.set_page_config(
-    page_title="Brooks Data Center Briefing",
+    page_title="Brooks Data Center Daily Briefing",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': None,
+        'Report a bug': None,
+        'About': "Brooks Data Center Daily Briefing - Desktop Application"
+    }
 )
 
 # Enhanced Custom CSS for dark theme with vibrant colors
@@ -82,11 +103,37 @@ st.markdown("""
         text-rendering: optimizeLegibility;
     }
     
-    /* Main container */
+    /* Main container - optimized for desktop/larger screens */
     .main .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
-        max-width: 1400px;
+        max-width: 1600px;  /* Increased from 1400px for better desktop experience */
+        padding-left: 3rem;
+        padding-right: 3rem;
+    }
+    
+    /* Desktop-specific optimizations */
+    @media (min-width: 1200px) {
+        .main .block-container {
+            max-width: 1800px;
+            padding-left: 4rem;
+            padding-right: 4rem;
+        }
+        
+        /* Wider columns for desktop */
+        .stColumns {
+            gap: 2rem !important;
+        }
+        
+        /* Larger dataframes on desktop */
+        .stDataFrame {
+            font-size: 0.95rem !important;
+        }
+        
+        /* Better spacing for desktop */
+        .element-container {
+            margin-bottom: 1.5rem !important;
+        }
     }
     
     /* App background */
@@ -241,27 +288,44 @@ st.markdown("""
         font-weight: 600 !important;
     }
     
-    /* Dataframes */
+    /* Dataframes - enhanced for desktop */
     .stDataFrame {
         background-color: #1e293b !important;
         border-radius: 0.5rem !important;
+        overflow-x: auto !important;
     }
     
-    /* Tabs with vibrant colors */
+    /* Better table display on desktop */
+    @media (min-width: 1200px) {
+        .stDataFrame table {
+            width: 100% !important;
+        }
+        
+        .stDataFrame th,
+        .stDataFrame td {
+            padding: 0.75rem 1rem !important;
+        }
+    }
+    
+    /* Tabs with vibrant colors - enhanced for desktop */
     .stTabs [data-baseweb="tab-list"] {
         background-color: #1e293b !important;
         border-radius: 0.5rem !important;
         padding: 0.25rem !important;
+        margin-bottom: 1.5rem !important;
     }
     
     .stTabs [data-baseweb="tab"] {
         color: #94a3b8 !important;
         font-weight: 600 !important;
         transition: all 0.3s ease !important;
+        padding: 0.75rem 1.5rem !important;
+        font-size: 1rem !important;
     }
     
     .stTabs [data-baseweb="tab"]:hover {
         color: #cbd5e1 !important;
+        background-color: rgba(51, 65, 85, 0.3) !important;
     }
     
     .stTabs [aria-selected="true"] {
@@ -270,6 +334,14 @@ st.markdown("""
         border-bottom: 3px solid #10b981 !important;
         font-weight: 700 !important;
         text-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+    }
+    
+    /* Desktop tab enhancements */
+    @media (min-width: 1200px) {
+        .stTabs [data-baseweb="tab"] {
+            padding: 1rem 2rem !important;
+            font-size: 1.1rem !important;
+        }
     }
     
     /* Expander */
@@ -434,7 +506,7 @@ def init_session_state() -> None:
 
 
 @st.cache_data(ttl=3600)  # Cache for 1 hour - speeds up repeated loads
-def load_sample_data():
+def load_sample_data() -> Dict[str, Any]:
     """Load sample input data - cached for performance."""
     return {
         'trading_date': SAMPLE_INPUT.trading_date,
@@ -446,7 +518,7 @@ def load_sample_data():
     }
 
 
-def parse_json_safely(json_str: str, field_name: str):
+def parse_json_safely(json_str: str, field_name: str) -> List[Any]:
     """Safely parse JSON string."""
     if not json_str or not json_str.strip():
         return []
@@ -459,7 +531,7 @@ def parse_json_safely(json_str: str, field_name: str):
         raise ValueError(f"Invalid JSON in {field_name}: {str(e)}")
 
 
-def render_input_form():
+def render_input_form() -> None:
     """Render the input form component."""
     st.title("📊 Daily Briefing Generator")
     st.markdown("Enter market data to generate today's briefing package.")
@@ -539,8 +611,40 @@ def render_input_form():
                     constraints_or_notes=constraints
                 )
                 
-                with st.spinner("Generating Analysis..."):
+                # Create progress tracker for report generation
+                progress_steps = [
+                    "Validating input",
+                    "Initializing AI",
+                    "Generating report text",
+                    "Parsing response",
+                    "Preparing report"
+                ]
+                tracker = create_progress_tracker(progress_steps, show_eta=True)
+                
+                try:
+                    # Step 0: Rate limit check
+                    tracker.update(0, "Checking rate limits...", 0.1)
+                    try:
+                        check_rate_limit(_report_generation_limiter, f"streamlit_report_{DEFAULT_CLIENT_ID}")
+                    except RuntimeError as e:
+                        tracker.error(f"Rate limit exceeded: {str(e)}")
+                        st.error(f"Rate limit exceeded: {str(e)}. Please wait a moment and try again.")
+                        return
+                    
+                    # Step 1: Initialize AI
+                    tracker.update(1, "Initializing AI service...", 0.2)
+                    
+                    # Step 2: Generate report (this is the long step)
+                    tracker.update(2, "Generating report with AI...", 0.3)
                     response = generate_daily_report(input_data)
+                    
+                    # Step 3: Parse response
+                    tracker.update(3, "Processing report data...", 0.9)
+                    
+                    # Step 4: Complete
+                    tracker.update(4, "Report ready!", 1.0)
+                    tracker.complete("Report generated successfully!")
+                    
                     st.session_state.report_data = response
                     st.session_state.market_data_input = market_data_list
                     
@@ -601,7 +705,7 @@ Watch Next: {', '.join(report.watch_next_bullets) if report.watch_next_bullets e
                 st.error(f"Error: {str(e)}")
 
 
-def render_audio_player(audio_text: str, audio_gcs_path: Optional[str] = None):
+def render_audio_player(audio_text: str, audio_gcs_path: Optional[str] = None) -> None:
     """
     Render enhanced audio player component with both text and audio playback.
     
@@ -652,7 +756,7 @@ def render_audio_player(audio_text: str, audio_gcs_path: Optional[str] = None):
         st.warning("No audio report available.")
 
 
-def _render_audio_text_fallback(audio_text: str, audio_gcs_path: Optional[str] = None):
+def _render_audio_text_fallback(audio_text: str, audio_gcs_path: Optional[str] = None) -> None:
     """Render audio text as fallback when audio file is not available."""
     with st.expander("View Audio Script"):
         st.text(audio_text)
@@ -664,7 +768,7 @@ def _render_audio_text_fallback(audio_text: str, audio_gcs_path: Optional[str] =
         st.info(f"💡 Audio file available at: `{audio_gcs_path}`")
 
 
-def render_report_view(report_data: DailyReportResponse, market_data: list):
+def render_report_view(report_data: DailyReportResponse, market_data: List[Dict[str, Any]]) -> None:
     """Render the report view component with export options."""
     # Export buttons at the top
     st.markdown("---")
@@ -724,10 +828,17 @@ def render_report_view(report_data: DailyReportResponse, market_data: list):
                 df_sorted['abs_change'] = df_sorted['percent_change'].abs()
                 top_movers = df_sorted.nlargest(5, 'abs_change')
                 
-                st.bar_chart(
-                    top_movers.set_index('ticker')[['volume', 'average_volume']],
-                    height=300
-                )
+                # Use enhanced chart component
+                try:
+                    from python_app.components.charts import render_performance_chart
+                    render_performance_chart(market_data, title="Top Movers Performance", height=400)
+                except ImportError:
+                    # Fallback to basic chart if plotly not available
+                    st.bar_chart(
+                        top_movers.set_index('ticker')[['volume', 'average_volume']],
+                        height=300
+                    )
+                    st.info("💡 Install plotly for enhanced charts: pip install plotly")
         
         # Display mini reports
         if report_data.reports:
@@ -783,7 +894,7 @@ def render_report_view(report_data: DailyReportResponse, market_data: list):
             render_audio_player(report_data.audio_report, audio_gcs_path)
 
 
-def render_logo():
+def render_logo() -> None:
     """Render the Fellowship Intelligence logo in the sidebar with clean, colorful styling."""
     logo_path = Path("static/images/logo.png")
     
@@ -816,36 +927,69 @@ def render_logo():
         st.markdown("---")  # Divider
 
 
-def render_watchlist():
+def render_watchlist() -> None:
     """Render the watchlist component in the sidebar with Firestore persistence."""
     with st.sidebar:
         st.subheader("Watchlist")
         
-        # Show current watchlist with remove buttons
-        for ticker in list(st.session_state.watchlist):
-            cols = st.columns([3, 1])
-            cols[0].write(ticker)
-            if cols[1].button("✕", key=f"remove_{ticker}"):
-                st.session_state.watchlist = [
-                    t for t in st.session_state.watchlist if t != ticker
-                ]
-                _save_watchlist_to_firestore()
-                st.rerun()
+        # Enhanced watchlist with tabs
+        watchlist_tab1, watchlist_tab2 = st.tabs(["Simple", "Advanced"])
         
-        # Add new ticker
-        new_ticker = st.text_input("Add ticker", key="add_ticker_input").upper().strip()
-        if st.button("Add", key="add_ticker_btn") and new_ticker:
-            if new_ticker not in st.session_state.watchlist:
-                st.session_state.watchlist.append(new_ticker)
-                _save_watchlist_to_firestore()
-                st.rerun()
+        with watchlist_tab1:
+            # Show current watchlist with remove buttons
+            for ticker in list(st.session_state.watchlist):
+                cols = st.columns([3, 1])
+                cols[0].write(ticker)
+                if cols[1].button("✕", key=f"remove_{ticker}"):
+                    st.session_state.watchlist = [
+                        t for t in st.session_state.watchlist if t != ticker
+                    ]
+                    _save_watchlist_to_firestore()
+                    st.rerun()
+            
+            # Add new ticker
+            new_ticker = st.text_input("Add ticker", key="add_ticker_input").upper().strip()
+            if st.button("Add", key="add_ticker_btn") and new_ticker:
+                if new_ticker not in st.session_state.watchlist:
+                    st.session_state.watchlist.append(new_ticker)
+                    _save_watchlist_to_firestore()
+                    st.rerun()
+            
+            # Save to Firestore button
+            if st.button("💾 Save Watchlist", key="save_watchlist_btn", use_container_width=True):
+                if _save_watchlist_to_firestore():
+                    st.success("Watchlist saved!")
+                else:
+                    st.error("Failed to save watchlist")
         
-        # Save to Firestore button
-        if st.button("💾 Save Watchlist", key="save_watchlist_btn", use_container_width=True):
-            if _save_watchlist_to_firestore():
-                st.success("Watchlist saved to Firestore!")
-            else:
-                st.error("Failed to save watchlist")
+        with watchlist_tab2:
+            # Enhanced features
+            try:
+                from python_app.components.watchlist_enhanced import (
+                    render_watchlist_categories,
+                    render_watchlist_bulk_operations
+                )
+                
+                def update_watchlist(new_watchlist: Optional[List[str]] = None):
+                    if new_watchlist:
+                        st.session_state.watchlist = new_watchlist
+                    _save_watchlist_to_firestore()
+                
+                render_watchlist_bulk_operations(
+                    st.session_state.watchlist,
+                    DEFAULT_CLIENT_ID,
+                    on_update=update_watchlist
+                )
+                
+                st.divider()
+                
+                render_watchlist_categories(
+                    st.session_state.watchlist,
+                    DEFAULT_CLIENT_ID,
+                    on_update=lambda: update_watchlist()
+                )
+            except Exception as e:
+                st.info("Enhanced features require Firestore access")
 
 
 def _save_watchlist_to_firestore() -> bool:
@@ -888,7 +1032,7 @@ def _load_watchlist_from_firestore() -> list[str]:
     return DEFAULT_WATCHLIST.copy()
 
 
-def render_chat_interface():
+def render_chat_interface() -> None:
     """Render the chat interface component."""
     st.sidebar.header("💬 Analyst Q&A")
     st.sidebar.caption("Ask about today's data")
@@ -1046,32 +1190,59 @@ def render_dashboard_tab() -> None:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("🚀 Generate Daily Market Report", type="primary", use_container_width=True):
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+            # Create progress tracker
+            steps = [
+                "Rate limit check",
+                "Fetching market data",
+                "Generating AI report text",
+                "Storing report in Firestore",
+                "Generating audio (TTS)",
+                "Uploading audio to Cloud Storage",
+                "Finalizing report"
+            ]
+            tracker = create_progress_tracker(steps, show_eta=True)
             
             try:
                 trading_date = date.today()
                 
-                # Market data: ~1.4s (18% of total)
-                status_text.text("📊 Fetching market data...")
-                progress_bar.progress(18)
+                # Step 0: Rate limit check
+                tracker.update(0, "Checking rate limits...", 0.05)
+                try:
+                    check_rate_limit(_report_generation_limiter, f"streamlit_watchlist_{DEFAULT_CLIENT_ID}")
+                except RuntimeError as e:
+                    tracker.error(f"Rate limit exceeded: {str(e)}")
+                    st.error(f"Rate limit exceeded: {str(e)}. Please wait a moment and try again.")
+                    return
                 
-                # Gemini text: ~3.2s (42% of total)
-                status_text.text("🤖 Generating AI report text...")
-                progress_bar.progress(60)
+                # Step 1: Market data (happens inside generate_watchlist_daily_report)
+                tracker.update(1, "Fetching market data for watchlist...", 0.15)
                 
-                # TTS + Firestore + GCS: ~3.1s (40% of total)
-                status_text.text("🎙️ Generating audio and saving report...")
-                progress_bar.progress(90)
-                
+                # Note: generate_watchlist_daily_report does multiple steps internally
+                # We'll update progress at key points
                 report = generate_watchlist_daily_report(
                     trading_date=trading_date,
                     client_id=DEFAULT_CLIENT_ID,
                     watchlist=st.session_state.watchlist,
                 )
                 
-                progress_bar.progress(100)
-                status_text.text("✅ Complete!")
+                # Update progress for remaining steps (they happen in the function)
+                tracker.update(2, "AI report text generated", 0.50)
+                tracker.update(3, "Report stored in Firestore", 0.70)
+                tracker.update(4, "Audio generation complete", 0.85)
+                tracker.update(5, "Audio uploaded to Cloud Storage", 0.95)
+                tracker.update(6, "Report finalized", 0.98)
+                tracker.complete("Report generated successfully!")
+                
+                # Show notification
+                try:
+                    from python_app.components.notifications import notify_report_complete
+                    notify_report_complete(
+                        trading_date=trading_date.isoformat(),
+                        client_id=DEFAULT_CLIENT_ID,
+                        has_audio=bool(report.get("audio_gcs_path"))
+                    )
+                except Exception as e:
+                    logger.warning("Failed to show notification: %s", str(e))
                 
                 st.success("✅ Daily market report generated successfully!")
                 st.info("Check the 'Daily Watchlist Report' tab to view the full report.")
@@ -1085,6 +1256,14 @@ def render_dashboard_tab() -> None:
                     )
                 progress_bar.progress(0)
                 status_text.empty()
+                
+                # Show error notification
+                try:
+                    from python_app.components.notifications import notify_report_error
+                    notify_report_error(str(e), trading_date=trading_date.isoformat())
+                except Exception:
+                    pass  # Notification failure shouldn't break error display
+                
                 st.error(f"Error generating report: {str(e)}")
                 logger.error("Report generation error: %s", str(e), exc_info=True)
     
@@ -1111,10 +1290,39 @@ def render_dashboard_tab() -> None:
         
         st.dataframe(movers_df, use_container_width=True)
         
-        # Show chart if we have data
+        # Show enhanced charts if we have data
         if 'percent_change' in movers_df.columns and 'volume' in movers_df.columns:
-            chart_data = movers_df.set_index('ticker')[['volume', 'percent_change']]
-            st.bar_chart(chart_data)
+            try:
+                from python_app.components.charts import (
+                    render_performance_chart,
+                    render_volume_analysis,
+                    render_market_sentiment_indicator,
+                    render_price_movement_scatter
+                )
+                
+                # Convert DataFrame to list of dicts for chart component
+                market_data_list = movers_df.to_dict('records')
+                
+                # Performance chart
+                render_performance_chart(market_data_list, title="Watchlist Performance", height=400)
+                
+                # Additional charts in tabs
+                chart_tab1, chart_tab2, chart_tab3 = st.tabs(["Volume Analysis", "Market Sentiment", "Price Movement"])
+                
+                with chart_tab1:
+                    render_volume_analysis(market_data_list, title="Volume vs Average Volume", height=350)
+                
+                with chart_tab2:
+                    render_market_sentiment_indicator(market_data_list, title="Watchlist Sentiment", height=300)
+                
+                with chart_tab3:
+                    render_price_movement_scatter(market_data_list, title="Price Movement vs Volume", height=400)
+                    
+            except ImportError:
+                # Fallback to basic chart if plotly not available
+                chart_data = movers_df.set_index('ticker')[['volume', 'percent_change']]
+                st.bar_chart(chart_data)
+                st.info("💡 Install plotly for enhanced charts: pip install plotly")
     else:
         st.info("No market data available for the selected date. Generate a report first to populate data.")
 
@@ -1130,6 +1338,13 @@ def render_watchlist_report_tab() -> None:
     if st.button("Generate today's watchlist report"):
         with st.spinner("Generating report..."):
             try:
+                # Rate limit check
+                try:
+                    check_rate_limit(_report_generation_limiter, f"streamlit_watchlist_{DEFAULT_CLIENT_ID}")
+                except RuntimeError as e:
+                    st.error(f"Rate limit exceeded: {str(e)}. Please wait a moment and try again.")
+                    return
+                
                 report = generate_watchlist_daily_report(
                     trading_date=trading_date,
                     client_id=DEFAULT_CLIENT_ID,
@@ -1226,15 +1441,20 @@ def render_report_history_tab() -> None:
     st.header("📚 Report History")
     st.caption("Browse and view past daily reports")
     
-    try:
-        from report_repository import list_daily_reports
-        
-        # Filter options
-        col1, col2 = st.columns(2)
-        with col1:
-            limit = st.number_input("Number of reports to show", min_value=10, max_value=100, value=20, step=10)
-        with col2:
-            show_all = st.checkbox("Show all clients", value=False)
+    # Add comparison and bookmark tabs
+    history_tab1, history_tab2, history_tab3 = st.tabs(["Reports", "Bookmarks", "Compare Reports"])
+    
+    with history_tab1:
+        try:
+            from report_repository import list_daily_reports
+            from python_app.components.search_filter import render_search_filter_ui
+            
+            # Basic filter options
+            col1, col2 = st.columns(2)
+            with col1:
+                limit = st.number_input("Number of reports to show", min_value=10, max_value=100, value=50, step=10)
+            with col2:
+                show_all = st.checkbox("Show all clients", value=False)
         
         # Fetch reports with pagination (client-scoped)
         current_client_id = st.session_state.get('client_id', DEFAULT_CLIENT_ID)
@@ -1264,7 +1484,15 @@ def render_report_history_tab() -> None:
             st.info("No reports found. Generate a report to see it here.")
             return
         
-        st.success(f"Found {result.get('count', len(reports))} report(s)")
+        # Apply search and filter UI
+        try:
+            from python_app.components.search_filter import render_search_filter_ui
+            filtered_reports = render_search_filter_ui(reports)
+        except Exception as e:
+            logger.warning("Search/filter UI failed: %s", str(e))
+            filtered_reports = reports
+        
+        st.success(f"Found {len(filtered_reports)} of {len(reports)} report(s)")
         
         # Pagination controls
         if has_more or st.session_state.report_history_page:
@@ -1283,8 +1511,8 @@ def render_report_history_tab() -> None:
                 if st.session_state.report_history_page:
                     st.caption(f"Showing reports after {st.session_state.report_history_page}")
         
-        # Display reports in a scrollable list
-        for report in reports:
+        # Display filtered reports in a scrollable list
+        for report in filtered_reports:
             with st.expander(
                 f"📅 {report.get('trading_date', 'Unknown Date')} - {len(report.get('tickers', []))} tickers",
                 expanded=False
@@ -1328,9 +1556,18 @@ def render_report_history_tab() -> None:
                 action_col1, action_col2, action_col3 = st.columns(3)
                 
                 with action_col1:
-                    if st.button("📄 View Full Report", key=f"view_{report.get('trading_date')}"):
-                        st.session_state['selected_report_date'] = report.get('trading_date')
-                        st.rerun()
+                    col_view, col_bookmark = st.columns([2, 1])
+                    with col_view:
+                        if st.button("📄 View Full Report", key=f"view_{report.get('trading_date')}"):
+                            st.session_state['selected_report_date'] = report.get('trading_date')
+                            st.rerun()
+                    with col_bookmark:
+                        # Bookmark button
+                        try:
+                            from python_app.components.report_viewer import render_bookmark_button
+                            render_bookmark_button(report.get('trading_date'), DEFAULT_CLIENT_ID)
+                        except Exception:
+                            pass  # Bookmarking is optional
                 
                 with action_col2:
                     # Export buttons
@@ -1356,11 +1593,53 @@ def render_report_history_tab() -> None:
                     else:
                         st.info("No audio available")
         
-    except ImportError:
-        st.error("Unable to load report repository. Check Firestore configuration.")
-    except Exception as e:
-        logger.error("Error loading report history: %s", str(e), exc_info=True)
-        st.error(f"Error loading report history: {str(e)}")
+        except ImportError:
+            st.error("Unable to load report repository. Check Firestore configuration.")
+        except Exception as e:
+            logger.error("Error loading report history: %s", str(e), exc_info=True)
+            st.error(f"Error loading report history: {str(e)}")
+    
+    with history_tab2:
+        # Bookmarks tab
+        try:
+            from python_app.components.report_viewer import render_bookmark_management
+            render_bookmark_management(DEFAULT_CLIENT_ID)
+        except Exception as e:
+            st.error(f"Failed to load bookmarks: {str(e)}")
+    
+    with history_tab3:
+        # Compare Reports tab
+        try:
+            from python_app.components.report_viewer import render_report_comparison
+            
+            st.subheader("Compare Two Reports")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                report1_date = st.date_input(
+                    "First Report Date",
+                    value=date.today() - timedelta(days=1),
+                    key="compare_report1"
+                )
+            
+            with col2:
+                report2_date = st.date_input(
+                    "Second Report Date",
+                    value=date.today(),
+                    key="compare_report2"
+                )
+            
+            if st.button("Compare Reports", type="primary"):
+                if report1_date == report2_date:
+                    st.warning("Please select two different dates for comparison.")
+                else:
+                    render_report_comparison(
+                        report1_date.isoformat(),
+                        report2_date.isoformat(),
+                        DEFAULT_CLIENT_ID
+                    )
+        except Exception as e:
+            st.error(f"Failed to load comparison: {str(e)}")
 
 
 def render_ai_chat_tab() -> None:
@@ -1386,14 +1665,29 @@ def main() -> None:
     # Logo in sidebar (at the top) - DISABLED
     # render_logo()
     
+    # Status indicators in sidebar
+    with st.sidebar.container():
+        render_status_indicators(show_in_sidebar=True)
+        st.sidebar.divider()
+        render_keyboard_shortcuts_help()
+        
+        # Notification settings
+        try:
+            from python_app.components.notifications import render_notification_settings
+            st.sidebar.divider()
+            render_notification_settings()
+        except Exception:
+            pass  # Notifications are optional
+    
     st.title("Brooks Data Center Daily Briefing")
     
-    tab_dashboard, tab_report, tab_history, tab_chat = st.tabs(
-        ["Dashboard", "Daily Watchlist Report", "Report History", "AI Chat"]
+    tab_dashboard, tab_report, tab_history, tab_chat, tab_help = st.tabs(
+        ["Dashboard", "Daily Watchlist Report", "Report History", "AI Chat", "Help"]
     )
     
     with tab_dashboard:
-        render_dashboard_tab()
+        firestore_client = get_firestore_client()
+        render_dashboard(firestore_client, DEFAULT_CLIENT_ID)
     
     with tab_report:
         render_watchlist_report_tab()
@@ -1403,6 +1697,13 @@ def main() -> None:
     
     with tab_chat:
         render_ai_chat_tab()
+    
+    with tab_help:
+        try:
+            from python_app.components.help_center import render_help_center
+            render_help_center()
+        except Exception as e:
+            st.error(f"Failed to load help center: {str(e)}")
     
     # Watchlist in sidebar (always visible)
     render_watchlist()

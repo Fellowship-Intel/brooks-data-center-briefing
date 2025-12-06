@@ -4,9 +4,14 @@ from typing import List
 from python_app.types import InputData, MarketData, NewsItem
 
 
-DEFAULT_WATCHLIST: List[str] = ["IREN", "CRWV", "NBIS", "MRVL"]
+# Import centralized config
+from config import get_config
 
-DEFAULT_CLIENT_ID = "michael_brooks"  # keep consistent with your existing Firestore client_id
+_config = get_config()
+
+DEFAULT_WATCHLIST: List[str] = _config.default_watchlist
+
+DEFAULT_CLIENT_ID = _config.default_client_id
 
 
 SYSTEM_INSTRUCTION = """

@@ -17,5 +17,6 @@ Pillow>=10.0.0
 reportlab>=4.0.0
 sentry-sdk>=2.0.0
 elevenlabs>=1.0.0
+plotly>=5.0.0
 
 

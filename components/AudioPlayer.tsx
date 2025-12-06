@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Play, Pause, Square, Volume2, AlertCircle } from 'lucide-react';
+import { logger } from '../utils/logger';
 
 interface AudioPlayerProps {
   text: string;
@@ -111,7 +112,7 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ text }) => {
                 return;
             }
             
-            console.error("TTS Chunk Error:", e.error, e);
+            logger.error("TTS Chunk Error:", e.error, e);
             
             if (index === chunks.length - 1 && mountedRef.current) {
                 setIsPlaying(false);
@@ -173,34 +174,38 @@ const AudioPlayer: React.FC<AudioPlayerProps> = ({ text }) => {
                 <button 
                     onClick={handlePlay} 
                     className="p-2 hover:bg-slate-800 rounded-full text-emerald-400 transition-colors"
+                    aria-label="Play audio briefing"
                     title="Play"
                 >
-                    <Play size={20} fill="currentColor" />
+                    <Play size={20} fill="currentColor" aria-hidden="true" />
                 </button>
             ) : isPaused ? (
                  <button 
                     onClick={handlePlay} 
                     className="p-2 hover:bg-slate-800 rounded-full text-emerald-400 transition-colors"
+                    aria-label="Resume audio briefing"
                     title="Resume"
                 >
-                    <Play size={20} fill="currentColor" />
+                    <Play size={20} fill="currentColor" aria-hidden="true" />
                 </button>
             ) : (
                 <button 
                     onClick={handlePause} 
                     className="p-2 hover:bg-slate-800 rounded-full text-amber-400 transition-colors"
+                    aria-label="Pause audio briefing"
                     title="Pause"
                 >
-                    <Pause size={20} fill="currentColor" />
+                    <Pause size={20} fill="currentColor" aria-hidden="true" />
                 </button>
             )}
             
             <button 
                 onClick={handleStop} 
                 className="p-2 hover:bg-slate-800 rounded-full text-red-400 transition-colors"
+                aria-label="Stop audio briefing"
                 title="Stop"
             >
-                <Square size={16} fill="currentColor" />
+                <Square size={16} fill="currentColor" aria-hidden="true" />
             </button>
         </div>
     </div>

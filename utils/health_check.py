@@ -35,19 +35,23 @@ def check_firestore() -> Dict[str, Any]:
 
 def check_storage() -> Dict[str, Any]:
     """
-    Check Cloud Storage connectivity.
+    Check Cloud Storage connectivity by checking if the reports bucket exists.
+    This only requires storage.buckets.get permission, not storage.buckets.list.
     
     Returns:
         Dictionary with status and details
     """
     try:
-        from gcp_clients import get_storage_client
-        client = get_storage_client()
-        # Try to list buckets (lightweight operation)
-        list(client.list_buckets(max_results=1))
+        import os
+        from gcp_clients import get_bucket
+        bucket_name = os.getenv("REPORTS_BUCKET_NAME", "mikebrooks-reports")
+        bucket = get_bucket(bucket_name)
+        # Try to get bucket metadata (lightweight operation that doesn't require list permission)
+        bucket.reload()
         return {
             "status": "healthy",
             "service": "storage",
+            "bucket": bucket_name,
             "timestamp": datetime.now().isoformat(),
         }
     except Exception as e:

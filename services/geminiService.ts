@@ -1,146 +1,228 @@
-import { GoogleGenAI, Chat } from "@google/genai";
-import { SYSTEM_INSTRUCTION } from '../constants';
 import { DailyReportResponse, InputData } from '../types';
+import { logger } from '../utils/logger';
 
-let ai: GoogleGenAI | null = null;
-let chatSession: Chat | null = null;
-let isJsonMode = false;
+// API base URL - must be set via environment variable
+const API_BASE_URL = import.meta.env.VITE_API_URL;
 
-const initializeAI = () => {
-  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    console.error("API_KEY or GEMINI_API_KEY is missing from environment variables.");
-    throw new Error("API Key not found");
-  }
-  if (!ai) {
-    ai = new GoogleGenAI({ apiKey });
-  }
-};
+if (!API_BASE_URL) {
+  throw new Error('VITE_API_URL environment variable is not set');
+}
 
+/**
+ * Generate a daily report by calling the Node.js API.
+ */
 export const generateDailyReport = async (inputData: InputData): Promise<DailyReportResponse> => {
-  initializeAI();
-  if (!ai) throw new Error("AI not initialized");
-
-  const hasMarketData = inputData.market_data_json && inputData.market_data_json.length > 0;
-  const hasNewsData = inputData.news_json && inputData.news_json.length > 0;
-
-  const prompt = `
-    Generate today's daily briefing and audio report based on the following context.
-    
-    Trading Date: ${inputData.trading_date} (Use this date or the most recent trading session if today is a weekend/holiday).
-    Tickers Tracked: ${inputData.tickers_tracked.join(', ')}
-    Macro Context Instruction: ${inputData.macro_context}
-    Constraints/Notes: ${inputData.constraints_or_notes}
-
-    Market Data Status: ${hasMarketData ? "Provided in JSON below" : "**MISSING/EMPTY** - You MUST use Google Search to find the latest market data (Open, High, Low, Close, Volume) for the tracked tickers."}
-    News Data Status: ${hasNewsData ? "Provided in JSON below" : "**MISSING/EMPTY** - You MUST use Google Search to find the latest relevant news for the tracked tickers."}
-
-    If you perform a Google Search for market data, you MUST populate the 'updated_market_data' field in your JSON response with the values you found, so the dashboard can update its charts.
-
-    Market Data JSON (Input):
-    \`\`\`json
-    ${JSON.stringify(inputData.market_data_json)}
-    \`\`\`
-
-    News JSON (Input):
-    \`\`\`json
-    ${JSON.stringify(inputData.news_json)}
-    \`\`\`
-
-    CRITICAL OUTPUT INSTRUCTION:
-    1. You must return a SINGLE valid JSON object.
-    2. Do NOT wrap it in markdown code blocks (like \`\`\`json ... \`\`\`).
-    3. Do NOT include any conversational text before or after the JSON.
-    4. **IMPORTANT**: Ensure all newlines inside string values (like 'report_markdown' or 'audio_report') are properly escaped as \\n. Do not produce real line breaks inside the JSON string values.
-    5. **Return the JSON in a minified format (single line) if possible** to ensure parsing reliability.
-    6. **CRITICAL JSON SYNTAX**: Do NOT use unescaped double quotes inside your text string values. Use single quotes (') for emphasis or titles within the text content. (e.g. use 'AI Mega-Deals' instead of "AI Mega-Deals"). If you absolutely must use a double quote inside a string value, you MUST escape it with a backslash (\\").
-
-    The JSON object must strictly adhere to this schema:
-    {
-      "report_markdown": "string (The full written report in markdown format)",
-      "core_tickers_in_depth_markdown": "string (The deep dive section in markdown format)",
-      "reports": [
-        {
-          "ticker": "string",
-          "company_name": "string",
-          "section_title": "string",
-          "snapshot": "string",
-          "catalyst_and_context": "string",
-          "day_trading_lens": "string",
-          "watch_next_bullets": ["string"]
-        }
-      ],
-      "audio_report": "string (The full text for the audio report, written for TTS)",
-      "updated_market_data": [
-         {
-            "ticker": "string",
-            "company_name": "string",
-            "previous_close": number,
-            "open": number,
-            "high": number,
-            "low": number,
-            "close": number,
-            "volume": number,
-            "average_volume": number,
-            "percent_change": number,
-            "intraday_range": "string",
-            "market_cap": "string"
-         }
-      ]
-    }
-  `;
-
-  // We are entering JSON reporting mode
-  isJsonMode = true;
-
-  chatSession = ai.chats.create({
-    model: 'gemini-2.5-flash',
-    config: {
-      systemInstruction: SYSTEM_INSTRUCTION,
-      tools: [{ googleSearch: {} }]
-    },
-  });
-
-  const response = await chatSession.sendMessage({ message: prompt });
-  let text = response.text;
-  
-  if (!text) {
-    throw new Error("No response from Gemini");
-  }
-
-  // CLEANUP: Remove common markdown fences if present
-  text = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-
-  // ROBUST JSON EXTRACTION
-  // Find the first '{' and the last '}' to extract the JSON object, ignoring any preamble or markdown fences.
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  
-  if (start !== -1 && end !== -1) {
-    text = text.substring(start, end + 1);
-  } else {
-    // If we can't find braces, it's definitely invalid
-    console.error("No JSON object found in response:", text);
-    throw new Error("Model response did not contain a valid JSON object.");
-  }
-
   try {
-    return JSON.parse(text) as DailyReportResponse;
-  } catch (e) {
-    console.error("Failed to parse JSON response:", text);
-    throw new Error("Invalid JSON response from model. Please try again.");
+    logger.debug(`[geminiService] Generating report for ${inputData.trading_date} via ${API_BASE_URL}/reports/generate`);
+    
+    // Transform market_data_json array to prices dictionary format
+    const prices: Record<string, { close: number; change_percent: number }> = {};
+    const tickersList: string[] = [];
+    
+    if (inputData.market_data_json && inputData.market_data_json.length > 0) {
+      inputData.market_data_json.forEach((item) => {
+        const ticker = item.ticker.toUpperCase();
+        tickersList.push(ticker);
+        prices[ticker] = {
+          close: item.close,
+          change_percent: item.percent_change,
+        };
+      });
+    } else if (inputData.tickers_tracked && inputData.tickers_tracked.length > 0) {
+      // If no market data but tickers provided, use tickers list
+      inputData.tickers_tracked.forEach((ticker) => {
+        tickersList.push(ticker.toUpperCase());
+      });
+    }
+    
+    // Transform news_json array to ticker-keyed dictionary format
+    const newsItems: Record<string, Array<{ headline: string; source: string; summary: string }>> = {};
+    const macroNews: Array<{ headline: string; source: string; summary: string }> = [];
+    
+    if (inputData.news_json && inputData.news_json.length > 0) {
+      inputData.news_json.forEach((item) => {
+        const newsItem = {
+          headline: item.headline,
+          source: item.source || 'Unknown',
+          summary: item.summary || '',
+        };
+        
+        if (item.ticker && item.ticker.toUpperCase() !== 'MACRO') {
+          const ticker = item.ticker.toUpperCase();
+          if (!newsItems[ticker]) {
+            newsItems[ticker] = [];
+          }
+          newsItems[ticker].push(newsItem);
+        } else {
+          // Macro news or news without specific ticker
+          macroNews.push(newsItem);
+        }
+      });
+    }
+    
+    // Add macro news if any
+    if (macroNews.length > 0) {
+      newsItems['macro'] = macroNews;
+    }
+    
+    // Transform macro_context string to dictionary format
+    const macroContext: Record<string, any> = {};
+    if (inputData.macro_context) {
+      // Try to parse as JSON first, otherwise treat as plain text
+      try {
+        const parsed = JSON.parse(inputData.macro_context);
+        if (typeof parsed === 'object' && parsed !== null) {
+          Object.assign(macroContext, parsed);
+        } else {
+          macroContext['context'] = inputData.macro_context;
+        }
+      } catch {
+        // Not JSON, treat as plain text context
+        macroContext['context'] = inputData.macro_context;
+      }
+    }
+    
+    // Add notes if provided
+    if (inputData.constraints_or_notes) {
+      macroContext['notes'] = inputData.constraints_or_notes;
+    }
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout for report generation
+    
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE_URL}/reports/generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          trading_date: inputData.trading_date,
+          client_id: 'michael_brooks',
+          market_data: {
+            tickers: tickersList.length > 0 ? tickersList : inputData.tickers_tracked.map(t => t.toUpperCase()),
+            prices: prices,
+          },
+          news_items: Object.keys(newsItems).length > 0 ? newsItems : undefined,
+          macro_context: Object.keys(macroContext).length > 0 ? macroContext : undefined,
+        }),
+      });
+      clearTimeout(timeoutId);
+    } catch (fetchErr: any) {
+      clearTimeout(timeoutId);
+      if (fetchErr.name === 'AbortError') {
+        throw new Error('Request timeout - report generation took too long (over 2 minutes)');
+      }
+      throw fetchErr;
+    }
+
+    logger.debug(`[geminiService] Response status: ${response.status} ${response.statusText}`);
+
+    if (!response.ok) {
+      let errorMessage = `API error: ${response.status} ${response.statusText}`;
+      try {
+        const error = await response.json();
+        errorMessage = error.detail || error.message || errorMessage;
+        logger.error('[geminiService] API error response:', error);
+      } catch {
+        // Response is not JSON
+        const text = await response.text();
+        logger.error('[geminiService] Non-JSON error response:', text);
+      }
+      throw new Error(errorMessage);
+    }
+
+    const result = await response.json();
+    logger.debug('[geminiService] Report generated successfully, has raw_payload:', !!result.raw_payload);
+    
+    // Transform API response to match DailyReportResponse interface
+    // The API returns raw_payload which contains the full report structure
+    if (result.raw_payload) {
+      return result.raw_payload as DailyReportResponse;
+    }
+
+    // Fallback: construct from available fields
+    logger.warn('[geminiService] Response missing raw_payload, using fallback structure');
+    return {
+      report_markdown: result.summary_text || '',
+      core_tickers_in_depth_markdown: result.market_context || '',
+      reports: [],
+      audio_report: '',
+      updated_market_data: inputData.market_data_json,
+    };
+  } catch (error: any) {
+    logger.error('[geminiService] Error generating daily report:', error);
+    
+    // Enhance error message for common issues
+    if (error.message?.includes('timeout')) {
+      throw new Error('Report generation timed out. The server may be overloaded or the request is too complex.');
+    } else if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
+      throw new Error('Network error - unable to connect to the API server. Please check if the backend is running.');
+    } else if (error.message?.includes('CORS')) {
+      throw new Error('CORS error - the API server may not be configured to allow requests from this origin.');
+    }
+    
+    throw error;
   }
 };
 
+/**
+ * Send a chat message to the Node.js API.
+ */
 export const sendChatMessage = async (message: string): Promise<string> => {
-  if (!chatSession) {
-    throw new Error("Please generate a report first to establish context.");
-  }
+  try {
+    logger.debug(`[geminiService] Sending chat message via ${API_BASE_URL}/chat/message`);
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout for chat
+    
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE_URL}/chat/message`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+        body: JSON.stringify({ message }),
+      });
+      clearTimeout(timeoutId);
+    } catch (fetchErr: any) {
+      clearTimeout(timeoutId);
+      if (fetchErr.name === 'AbortError') {
+        throw new Error('Request timeout - chat response took too long');
+      }
+      throw fetchErr;
+    }
 
-  // If we were in strict JSON mode, we should ideally transition to a more conversational config,
-  // but keeping the history is more important. The system instruction handles both modes.
-  // We just simply send the message now.
-  
-  const response = await chatSession.sendMessage({ message });
-  return response.text || "I couldn't generate a response.";
+    logger.debug(`[geminiService] Chat response status: ${response.status}`);
+
+    if (!response.ok) {
+      let errorMessage = `API error: ${response.status} ${response.statusText}`;
+      try {
+        const error = await response.json();
+        errorMessage = error.detail || error.message || errorMessage;
+        logger.error('[geminiService] Chat API error:', error);
+      } catch {
+        // Response is not JSON
+      }
+      throw new Error(errorMessage);
+    }
+
+    const result = await response.json();
+    return result.response || "I couldn't generate a response.";
+  } catch (error: any) {
+    logger.error('[geminiService] Error sending chat message:', error);
+    
+    // Enhance error message
+    if (error.message?.includes('timeout')) {
+      throw new Error('Chat request timed out. Please try again.');
+    } else if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
+      throw new Error('Network error - unable to connect to the API server.');
+    }
+    
+    throw error;
+  }
 };

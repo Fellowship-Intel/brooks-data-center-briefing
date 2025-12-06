@@ -78,10 +78,12 @@ const ChatInterface: React.FC = () => {
         )}
       </div>
 
-      <form onSubmit={handleSend} className="p-4 border-t border-slate-800 bg-slate-900/30">
+      <form onSubmit={handleSend} className="p-4 border-t border-slate-800 bg-slate-900/30" aria-label="Chat input form">
         <div className="relative">
           <input
             type="text"
+            aria-label="Ask a follow-up question"
+            aria-describedby="chat-input-help"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask a follow-up..."
