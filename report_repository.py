@@ -236,6 +236,105 @@ def get_daily_report(trading_date: str) -> Optional[Dict[str, Any]]:
     return data
 
 
+def list_daily_reports(
+    client_id: Optional[str] = None,
+    limit: int = 50,
+    order_by: str = "trading_date",
+    descending: bool = True,
+    start_after: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    List daily reports from Firestore with optional filtering, pagination, and optimization.
+    
+    Args:
+        client_id: Optional client ID to filter by. If None, returns all reports.
+        limit: Maximum number of reports to return (default: 50, max: 100)
+        order_by: Field to order by (default: "trading_date")
+        descending: Whether to sort in descending order (default: True)
+        start_after: Trading date to start after (for pagination)
+        
+    Returns:
+        Dictionary with:
+            - 'reports': List of report dictionaries
+            - 'has_more': Boolean indicating if more results are available
+            - 'last_date': Last trading_date in results (for pagination)
+            - 'count': Number of reports returned
+    """
+    try:
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Enforce max limit for performance
+        limit = min(limit, 100)
+        
+        db = get_firestore_client()
+        query = db.collection("daily_reports")
+        
+        # Filter by client_id if provided (creates index requirement)
+        if client_id:
+            query = query.where("client_id", "==", client_id)
+        
+        # Order by specified field (requires composite index if filtering)
+        direction = firestore.Query.DESCENDING if descending else firestore.Query.ASCENDING
+        
+        # Use trading_date as primary sort (it's the document ID, so very efficient)
+        if order_by == "trading_date":
+            # Document ID ordering is most efficient
+            if start_after:
+                query = query.start_after({order_by: start_after})
+            query = query.order_by(order_by, direction=direction)
+        else:
+            # For other fields, need to order by that field
+            query = query.order_by(order_by, direction=direction)
+            if start_after:
+                # For non-ID fields, pagination is more complex
+                # This is a simplified version
+                pass
+        
+        # Limit results
+        query = query.limit(limit + 1)  # Fetch one extra to check if more exists
+        
+        # Execute query
+        docs = list(query.stream())
+        
+        # Check if there are more results
+        has_more = len(docs) > limit
+        if has_more:
+            docs = docs[:limit]  # Remove the extra one
+        
+        reports = []
+        last_date = None
+        for doc in docs:
+            data = doc.to_dict()
+            data["id"] = doc.id
+            reports.append(data)
+            # Track last date for pagination
+            if order_by == "trading_date":
+                last_date = data.get("trading_date")
+        
+        logger.info("Listed %d reports (has_more: %s)", len(reports), has_more)
+        
+        return {
+            "reports": reports,
+            "has_more": has_more,
+            "last_date": last_date,
+            "count": len(reports)
+        }
+        
+    except Exception as e:
+        # Log error but return empty result to prevent UI crashes
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error("Error listing daily reports: %s", str(e), exc_info=True)
+        return {
+            "reports": [],
+            "has_more": False,
+            "last_date": None,
+            "count": 0,
+            "error": str(e)
+        }
+
+
 def update_daily_report_email_status(trading_date: str, status: str) -> None:
     """
     Update only the 'email_status' field of a daily report.

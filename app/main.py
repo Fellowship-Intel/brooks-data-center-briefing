@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Dict, Optional, List
-
+import os
 import logging
 
 from fastapi import FastAPI, HTTPException
@@ -10,6 +10,15 @@ from pydantic import BaseModel
 
 from report_repository import get_daily_report
 from report_service import generate_and_store_daily_report, generate_watchlist_daily_report
+
+# Initialize error tracking (optional)
+try:
+    from utils.error_tracking import init_error_tracking, capture_exception
+    init_error_tracking(environment=os.getenv("ENVIRONMENT", "development"))
+    _error_tracking_available = True
+except ImportError:
+    _error_tracking_available = False
+    def capture_exception(*args, **kwargs): pass
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +121,49 @@ def _dummy_macro_context() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+@app.get("/health")
+async def health_check() -> Dict[str, Any]:
+    """
+    Health check endpoint for monitoring and load balancers.
+    
+    Returns:
+        Dictionary with status and service health information
+    """
+    try:
+        from utils.health_check import comprehensive_health_check
+        
+        health_status = comprehensive_health_check()
+        
+        # Add metrics if available
+        try:
+            from utils.metrics import get_metrics_collector
+            metrics = get_metrics_collector()
+            health_status["metrics"] = metrics.get_stats()
+        except Exception:
+            pass  # Metrics optional
+        
+        # Determine HTTP status code
+        if health_status["status"] == "unhealthy":
+            raise HTTPException(
+                status_code=503,
+                detail=health_status
+            )
+        
+        return health_status
+    except Exception as e:
+        logger.error("Health check failed: %s", e, exc_info=True)
+        if _error_tracking_available:
+            capture_exception(e, tags={"endpoint": "health_check"})
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "unhealthy",
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e)
+            }
+        )
+
 
 @app.post("/reports/generate")
 async def generate_report(req: GenerateReportRequest) -> Dict[str, Any]:

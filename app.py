@@ -7,8 +7,9 @@ import sys
 import os
 from datetime import datetime, date
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import pandas as pd
+import logging
 
 # Add the python_app directory to the path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -40,6 +41,24 @@ from report_service import (
     get_audio_bytes_from_gcs,
 )
 from report_repository import get_daily_report
+
+# Initialize error tracking (optional)
+try:
+    from utils.error_tracking import init_error_tracking, capture_exception, set_user_context
+    init_error_tracking(environment=os.getenv("ENVIRONMENT", "development"))
+    _error_tracking_available = True
+except ImportError:
+    _error_tracking_available = False
+    def capture_exception(*args, **kwargs): pass
+    def set_user_context(*args, **kwargs): pass
+
+# Set up logging
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d - %(message)s",
+    )
 
 
 # Page configuration
@@ -398,7 +417,8 @@ st.markdown("""
 def init_session_state() -> None:
     """Initialize Streamlit session state with default values."""
     if "watchlist" not in st.session_state:
-        st.session_state.watchlist = DEFAULT_WATCHLIST.copy()
+        # Try to load from Firestore, fall back to default
+        st.session_state.watchlist = _load_watchlist_from_firestore()
     if 'mode' not in st.session_state:
         st.session_state.mode = AppMode.INPUT
     if 'report_data' not in st.session_state:
@@ -581,23 +601,115 @@ Watch Next: {', '.join(report.watch_next_bullets) if report.watch_next_bullets e
                 st.error(f"Error: {str(e)}")
 
 
-def render_audio_player(audio_text: str):
-    """Render audio player component."""
+def render_audio_player(audio_text: str, audio_gcs_path: Optional[str] = None):
+    """
+    Render enhanced audio player component with both text and audio playback.
+    
+    Args:
+        audio_text: The audio script text
+        audio_gcs_path: Optional GCS path to audio file (gs://bucket/path)
+    """
     st.markdown("### 🔊 Audio Briefing")
-    if audio_text:
-        # Streamlit doesn't have built-in TTS, so we'll use a simple text display
-        # For full TTS, you'd need to integrate with pyttsx3 or similar
-        with st.expander("View Audio Script"):
-            st.text(audio_text)
-        
-        # Option to copy for external TTS
-        st.code(audio_text, language=None)
+    
+    # Try to display audio player if GCS path is available
+    if audio_gcs_path:
+        try:
+            from utils.audio_utils import get_audio_signed_url, get_audio_bytes_from_gcs_safe
+            
+            # Try signed URL first (more efficient)
+            signed_url = get_audio_signed_url(audio_gcs_path, expiration_minutes=60)
+            
+            if signed_url:
+                st.audio(signed_url, format="audio/wav")
+                st.caption(f"📁 Audio file: `{audio_gcs_path}`")
+            else:
+                # Fallback to downloading bytes
+                logger.warning("Signed URL generation failed, falling back to direct download")
+                audio_bytes = get_audio_bytes_from_gcs_safe(audio_gcs_path)
+                if audio_bytes:
+                    st.audio(audio_bytes, format="audio/wav")
+                    st.caption(f"📁 Audio file: `{audio_gcs_path}`")
+                else:
+                    st.warning("Unable to load audio file. Showing text script instead.")
+                    _render_audio_text_fallback(audio_text, audio_gcs_path)
+        except ImportError:
+            # Fallback if audio_utils not available
+            logger.warning("audio_utils not available, using direct download")
+            try:
+                audio_bytes = get_audio_bytes_from_gcs(audio_gcs_path)
+                st.audio(audio_bytes, format="audio/wav")
+            except Exception as e:
+                st.error(f"Unable to load audio: {str(e)}")
+                _render_audio_text_fallback(audio_text, audio_gcs_path)
+        except Exception as e:
+            logger.error("Error rendering audio player: %s", str(e), exc_info=True)
+            st.error(f"Error loading audio: {str(e)}")
+            _render_audio_text_fallback(audio_text, audio_gcs_path)
+    elif audio_text:
+        # No audio file, just show text
+        _render_audio_text_fallback(audio_text, None)
     else:
         st.warning("No audio report available.")
 
 
+def _render_audio_text_fallback(audio_text: str, audio_gcs_path: Optional[str] = None):
+    """Render audio text as fallback when audio file is not available."""
+    with st.expander("View Audio Script"):
+        st.text(audio_text)
+    
+    # Option to copy for external TTS
+    st.code(audio_text, language=None)
+    
+    if audio_gcs_path:
+        st.info(f"💡 Audio file available at: `{audio_gcs_path}`")
+
+
 def render_report_view(report_data: DailyReportResponse, market_data: list):
-    """Render the report view component."""
+    """Render the report view component with export options."""
+    # Export buttons at the top
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        try:
+            from utils.export_utils import export_report_to_pdf
+            # Convert DailyReportResponse to dict for export
+            report_dict = {
+                "trading_date": date.today().isoformat(),
+                "client_id": DEFAULT_CLIENT_ID,
+                "summary_text": report_data.report_markdown[:500] if report_data.report_markdown else "",
+                "key_insights": [],
+                "market_context": report_data.core_tickers_in_depth_markdown[:500] if report_data.core_tickers_in_depth_markdown else "",
+                "tickers": [r.ticker for r in report_data.reports] if report_data.reports else []
+            }
+            pdf_bytes = export_report_to_pdf(report_dict)
+            st.download_button(
+                label="📄 Export PDF",
+                data=pdf_bytes,
+                file_name=f"report_{date.today().isoformat()}.pdf",
+                mime="application/pdf"
+            )
+        except ImportError:
+            st.info("PDF export: pip install reportlab")
+        except Exception as e:
+            logger.error("PDF export error: %s", str(e))
+    
+    with col2:
+        try:
+            from utils.export_utils import export_market_data_to_csv
+            if market_data:
+                market_csv_bytes = export_market_data_to_csv(market_data)
+                st.download_button(
+                    label="📊 Export Market Data CSV",
+                    data=market_csv_bytes,
+                    file_name=f"market_data_{date.today().isoformat()}.csv",
+                    mime="text/csv"
+                )
+        except Exception as e:
+            logger.error("CSV export error: %s", str(e))
+    
+    st.markdown("---")
+    
     tab1, tab2, tab3 = st.tabs(["Top Movers", "Deep Dive (Core)", "Full Narrative"])
     
     with tab1:
@@ -650,6 +762,25 @@ def render_report_view(report_data: DailyReportResponse, market_data: list):
             st.markdown(report_data.report_markdown)
         else:
             st.info("No narrative content available.")
+        
+        # Add audio player if available
+        if report_data.audio_report:
+            st.divider()
+            # Try to get audio GCS path from session state or Firestore
+            audio_gcs_path = None
+            try:
+                # Check if we have a trading date in session
+                if 'report_data' in st.session_state and st.session_state.report_data:
+                    # Try to get from Firestore
+                    from datetime import date as date_type
+                    trading_date = date_type.today()
+                    report = get_daily_report(trading_date.isoformat())
+                    if report and 'audio_gcs_path' in report:
+                        audio_gcs_path = report['audio_gcs_path']
+            except Exception:
+                pass  # Silently fail if we can't get audio path
+            
+            render_audio_player(report_data.audio_report, audio_gcs_path)
 
 
 def render_logo():
@@ -686,7 +817,7 @@ def render_logo():
 
 
 def render_watchlist():
-    """Render the watchlist component in the sidebar."""
+    """Render the watchlist component in the sidebar with Firestore persistence."""
     with st.sidebar:
         st.subheader("Watchlist")
         
@@ -698,6 +829,7 @@ def render_watchlist():
                 st.session_state.watchlist = [
                     t for t in st.session_state.watchlist if t != ticker
                 ]
+                _save_watchlist_to_firestore()
                 st.rerun()
         
         # Add new ticker
@@ -705,7 +837,55 @@ def render_watchlist():
         if st.button("Add", key="add_ticker_btn") and new_ticker:
             if new_ticker not in st.session_state.watchlist:
                 st.session_state.watchlist.append(new_ticker)
+                _save_watchlist_to_firestore()
                 st.rerun()
+        
+        # Save to Firestore button
+        if st.button("💾 Save Watchlist", key="save_watchlist_btn", use_container_width=True):
+            if _save_watchlist_to_firestore():
+                st.success("Watchlist saved to Firestore!")
+            else:
+                st.error("Failed to save watchlist")
+
+
+def _save_watchlist_to_firestore() -> bool:
+    """Save watchlist to Firestore for persistence."""
+    try:
+        from report_repository import get_client, create_or_update_client
+        
+        client_id = DEFAULT_CLIENT_ID
+        client = get_client(client_id)
+        
+        if client:
+            # Update existing client with new watchlist
+            client["watchlist"] = st.session_state.watchlist
+            create_or_update_client(client_id, **client)
+        else:
+            # Create new client document
+            create_or_update_client(
+                client_id,
+                watchlist=st.session_state.watchlist,
+                name="Michael Brooks"
+            )
+        
+        return True
+    except Exception as e:
+        return False
+
+
+def _load_watchlist_from_firestore() -> list[str]:
+    """Load watchlist from Firestore if available."""
+    try:
+        from report_repository import get_client
+        
+        client = get_client(DEFAULT_CLIENT_ID)
+        if client and "watchlist" in client:
+            return client["watchlist"]
+    except Exception:
+        # If Firestore fetch fails, return default
+        pass
+    
+    return DEFAULT_WATCHLIST.copy()
 
 
 def render_chat_interface():
@@ -897,9 +1077,16 @@ def render_dashboard_tab() -> None:
                 st.info("Check the 'Daily Watchlist Report' tab to view the full report.")
                 st.rerun()
             except Exception as e:
+                if _error_tracking_available:
+                    capture_exception(
+                        e,
+                        tags={"component": "dashboard", "action": "generate_report"},
+                        context={"watchlist": st.session_state.watchlist}
+                    )
                 progress_bar.progress(0)
                 status_text.empty()
                 st.error(f"Error generating report: {str(e)}")
+                logger.error("Report generation error: %s", str(e), exc_info=True)
     
     st.markdown("---")
     
@@ -963,19 +1150,217 @@ def render_watchlist_report_tab() -> None:
                 
                 if audio_gcs_path:
                     st.subheader("Audio (3–5 minutes)")
-
+                    # Use enhanced audio player
+                    render_audio_player("", audio_gcs_path)
+                
+                # Export buttons
+                st.divider()
+                st.subheader("Export Report")
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
                     try:
-                        audio_bytes = get_audio_bytes_from_gcs(audio_gcs_path)
-                        st.audio(audio_bytes, format="audio/wav")
-                    except Exception as exc:
-                        st.error(f"Unable to load audio from GCS: {exc}")
-                        st.write(f"GCS path: `{audio_gcs_path}`")
+                        from utils.export_utils import export_report_to_pdf
+                        pdf_bytes = export_report_to_pdf(report)
+                        st.download_button(
+                            label="📄 Download PDF",
+                            data=pdf_bytes,
+                            file_name=f"report_{trading_date.isoformat()}.pdf",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
+                    except ImportError:
+                        st.info("PDF export requires: pip install reportlab")
+                    except Exception as e:
+                        logger.error("PDF export failed: %s", str(e), exc_info=True)
+                        st.error(f"PDF export failed: {str(e)}")
+                
+                with col2:
+                    try:
+                        from utils.export_utils import export_report_to_csv
+                        csv_bytes = export_report_to_csv(report)
+                        st.download_button(
+                            label="📊 Download CSV",
+                            data=csv_bytes,
+                            file_name=f"report_{trading_date.isoformat()}.csv",
+                            mime="text/csv",
+                            use_container_width=True
+                        )
+                    except Exception as e:
+                        logger.error("CSV export failed: %s", str(e), exc_info=True)
+                        st.error(f"CSV export failed: {str(e)}")
+                
+                with col3:
+                    # Export market data if available
+                    try:
+                        movers_df = get_daily_movers_for_watchlist(
+                            watchlist=st.session_state.watchlist,
+                            trading_date=trading_date,
+                        )
+                        if not movers_df.empty:
+                            from utils.export_utils import export_market_data_to_csv
+                            market_data_list = movers_df.to_dict('records')
+                            market_csv_bytes = export_market_data_to_csv(market_data_list)
+                            st.download_button(
+                                label="📈 Download Market Data CSV",
+                                data=market_csv_bytes,
+                                file_name=f"market_data_{trading_date.isoformat()}.csv",
+                                mime="text/csv",
+                                use_container_width=True
+                            )
+                        else:
+                            st.info("No market data to export")
+                    except Exception as e:
+                        logger.error("Market data export failed: %s", str(e), exc_info=True)
+                        st.info("Market data export unavailable")
                 
                 st.success("Report generated successfully!")
             except Exception as e:
                 st.error(f"Error generating report: {str(e)}")
     else:
         st.info("Click the button above to generate a report for your watchlist.")
+
+
+def render_report_history_tab() -> None:
+    """Render the Report History tab showing past reports."""
+    st.header("📚 Report History")
+    st.caption("Browse and view past daily reports")
+    
+    try:
+        from report_repository import list_daily_reports
+        
+        # Filter options
+        col1, col2 = st.columns(2)
+        with col1:
+            limit = st.number_input("Number of reports to show", min_value=10, max_value=100, value=20, step=10)
+        with col2:
+            show_all = st.checkbox("Show all clients", value=False)
+        
+        # Fetch reports with pagination (client-scoped)
+        current_client_id = st.session_state.get('client_id', DEFAULT_CLIENT_ID)
+        client_id = None if show_all else current_client_id
+        
+        # Pagination state
+        if 'report_history_page' not in st.session_state:
+            st.session_state.report_history_page = None
+        
+        result = list_daily_reports(
+            client_id=client_id,
+            limit=limit,
+            order_by="trading_date",
+            descending=True,
+            start_after=st.session_state.report_history_page
+        )
+        
+        reports = result.get("reports", [])
+        has_more = result.get("has_more", False)
+        error = result.get("error")
+        
+        if error:
+            st.error(f"Error loading reports: {error}")
+            return
+        
+        if not reports:
+            st.info("No reports found. Generate a report to see it here.")
+            return
+        
+        st.success(f"Found {result.get('count', len(reports))} report(s)")
+        
+        # Pagination controls
+        if has_more or st.session_state.report_history_page:
+            col1, col2, col3 = st.columns([1, 1, 2])
+            with col1:
+                if st.button("◀ Previous", disabled=st.session_state.report_history_page is None):
+                    # Reset to beginning
+                    st.session_state.report_history_page = None
+                    st.rerun()
+            with col2:
+                if has_more and st.button("Next ▶"):
+                    # Move to next page
+                    st.session_state.report_history_page = result.get('last_date')
+                    st.rerun()
+            with col3:
+                if st.session_state.report_history_page:
+                    st.caption(f"Showing reports after {st.session_state.report_history_page}")
+        
+        # Display reports in a scrollable list
+        for report in reports:
+            with st.expander(
+                f"📅 {report.get('trading_date', 'Unknown Date')} - {len(report.get('tickers', []))} tickers",
+                expanded=False
+            ):
+                # Report metadata
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Trading Date", report.get('trading_date', 'N/A'))
+                with col2:
+                    tickers = report.get('tickers', [])
+                    st.metric("Tickers", len(tickers))
+                with col3:
+                    has_audio = "✅" if report.get('audio_gcs_path') else "❌"
+                    st.metric("Audio", has_audio)
+                
+                # Tickers list
+                if tickers:
+                    st.caption(f"Tickers: {', '.join(tickers)}")
+                
+                # Summary preview
+                summary = report.get('summary_text', '')
+                if summary:
+                    st.subheader("Summary")
+                    # Show first 500 chars with option to expand
+                    if len(summary) > 500:
+                        st.write(summary[:500] + "...")
+                        with st.expander("View full summary"):
+                            st.write(summary)
+                    else:
+                        st.write(summary)
+                
+                # Key insights
+                insights = report.get('key_insights', [])
+                if insights:
+                    st.subheader("Key Insights")
+                    for insight in insights:
+                        st.markdown(f"- {insight}")
+                
+                # Actions
+                st.divider()
+                action_col1, action_col2, action_col3 = st.columns(3)
+                
+                with action_col1:
+                    if st.button("📄 View Full Report", key=f"view_{report.get('trading_date')}"):
+                        st.session_state['selected_report_date'] = report.get('trading_date')
+                        st.rerun()
+                
+                with action_col2:
+                    # Export buttons
+                    try:
+                        from utils.export_utils import export_report_to_csv
+                        csv_bytes = export_report_to_csv(report)
+                        st.download_button(
+                            label="📊 Export CSV",
+                            data=csv_bytes,
+                            file_name=f"report_{report.get('trading_date', 'unknown')}.csv",
+                            mime="text/csv",
+                            key=f"csv_{report.get('trading_date')}"
+                        )
+                    except Exception as e:
+                        logger.error("CSV export failed: %s", str(e))
+                
+                with action_col3:
+                    # Audio player if available
+                    audio_gcs_path = report.get('audio_gcs_path')
+                    if audio_gcs_path:
+                        if st.button("🔊 Play Audio", key=f"audio_{report.get('trading_date')}"):
+                            render_audio_player("", audio_gcs_path)
+                    else:
+                        st.info("No audio available")
+        
+    except ImportError:
+        st.error("Unable to load report repository. Check Firestore configuration.")
+    except Exception as e:
+        logger.error("Error loading report history: %s", str(e), exc_info=True)
+        st.error(f"Error loading report history: {str(e)}")
 
 
 def render_ai_chat_tab() -> None:
@@ -985,6 +1370,17 @@ def render_ai_chat_tab() -> None:
 
 def main() -> None:
     """Main application entry point."""
+    # Validate configuration on startup
+    try:
+        from utils.config_validator import validate_config
+        config = validate_config()
+        logger.info("Configuration validated successfully")
+        if _error_tracking_available:
+            set_user_context(user_id=DEFAULT_CLIENT_ID)
+    except Exception as e:
+        logger.warning("Configuration validation failed: %s", str(e))
+        # Continue anyway - some features may not work
+    
     init_session_state()
     
     # Logo in sidebar (at the top) - DISABLED
@@ -992,8 +1388,8 @@ def main() -> None:
     
     st.title("Brooks Data Center Daily Briefing")
     
-    tab_dashboard, tab_report, tab_chat = st.tabs(
-        ["Dashboard", "Daily Watchlist Report", "AI Chat"]
+    tab_dashboard, tab_report, tab_history, tab_chat = st.tabs(
+        ["Dashboard", "Daily Watchlist Report", "Report History", "AI Chat"]
     )
     
     with tab_dashboard:
@@ -1001,6 +1397,9 @@ def main() -> None:
     
     with tab_report:
         render_watchlist_report_tab()
+    
+    with tab_history:
+        render_report_history_tab()
     
     with tab_chat:
         render_ai_chat_tab()

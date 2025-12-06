@@ -26,7 +26,7 @@ class GeminiTTSConfig:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-2.5-flash-preview-tts",
+        model: str = "gemini-2.0-flash-exp",  # TTS model - update when stable version available
         voice_name: str = "Kore",
         sample_rate_hz: int = 24000,
         channels: int = 1,

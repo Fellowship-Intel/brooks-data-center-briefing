@@ -1,7 +1,7 @@
-"""Utility functions for data conversion."""
+"""Utility modules for python_app package."""
 from dataclasses import asdict
 from typing import Dict, Any, List
-from .types import MarketData, NewsItem, MiniReport
+from python_app.types import MarketData, NewsItem, MiniReport
 
 
 def market_data_to_dict(md: MarketData) -> Dict[str, Any]:
@@ -77,8 +77,5 @@ def mini_report_to_dict(mr: MiniReport) -> Dict[str, Any]:
         'day_trading_lens': mr.day_trading_lens,
         'watch_next_bullets': mr.watch_next_bullets
     }
-
-
-
 
 

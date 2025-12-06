@@ -92,7 +92,31 @@ def mock_storage():
 @pytest.fixture
 def mock_tts():
     """Mock TTS so no real Gemini call happens."""
-    with patch("report_service.synthesize_speech") as mock_tts_func:
-        mock_tts_func.return_value = b"FAKE_AUDIO_BYTES"
+    with patch("report_service.tts_synthesize") as mock_tts_func:
+        mock_tts_func.return_value = (b"FAKE_AUDIO_BYTES", "gemini")
         yield mock_tts_func
+
+
+@pytest.fixture
+def mock_eleven_labs():
+    """Mock Eleven Labs TTS."""
+    with patch("tts.eleven_labs_tts.ELEVEN_LABS_AVAILABLE", True), \
+         patch("tts.eleven_labs_tts.generate") as mock_generate, \
+         patch("tts.eleven_labs_tts.set_api_key"), \
+         patch("tts.eleven_labs_tts.voices") as mock_voices, \
+         patch("tts.eleven_labs_tts.ElevenLabs"):
+        
+        # Mock voice response
+        mock_voice = MagicMock()
+        mock_voice.name = "Rachel"
+        mock_voice.voice_id = "test_voice_id"
+        mock_voices.return_value.voices = [mock_voice]
+        
+        # Mock audio generation
+        mock_generate.return_value = b"fake_eleven_labs_audio"
+        
+        yield {
+            "generate": mock_generate,
+            "voices": mock_voices,
+        }
 

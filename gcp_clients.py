@@ -1,4 +1,4 @@
-"""
+﻿"""
 GCP client helpers for the 'mikebrooks' project.
 
 This module centralizes Google Cloud Platform client creation and authentication.
@@ -184,6 +184,35 @@ def get_secret_manager_client() -> secretmanager.SecretManagerServiceClient:
     """
     _check_credentials()
     return secretmanager.SecretManagerServiceClient()
+
+
+def access_eleven_labs_api_key(version: str = "latest") -> str:
+    """
+    Retrieve the Eleven Labs API key from Secret Manager.
+    
+    Falls back to ELEVEN_LABS_API_KEY environment variable if Secret Manager is unavailable.
+    
+    Args:
+        version: Secret version to access (default: "latest").
+        
+    Returns:
+        The Eleven Labs API key as a string.
+        
+    Raises:
+        RuntimeError: If the key cannot be found in Secret Manager or environment.
+    """
+    # Try Secret Manager first
+    try:
+        return access_secret_value("ELEVEN_LABS_API_KEY", version)
+    except Exception:
+        # Fall back to environment variable
+        api_key = os.getenv("ELEVEN_LABS_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "Eleven Labs API key not found. Set ELEVEN_LABS_API_KEY in environment, "
+                "or ensure ELEVEN_LABS_API_KEY exists in Secret Manager."
+            )
+        return api_key
 
 
 def access_secret_value(secret_id: str, version: str = "latest") -> str:

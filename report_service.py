@@ -23,13 +23,18 @@ from urllib.parse import urlparse
 import google.generativeai as genai
 import pandas as pd
 
-# Set up logging
+# Enhanced structured logging
+import sys
 logger = logging.getLogger(__name__)
 if not logger.handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s:%(lineno)d - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
     )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 from gcp_clients import (
     get_storage_client,
@@ -47,9 +52,22 @@ from report_repository import (
 
 from settings import get_reports_bucket_name
 
-from tts.gemini_tts import synthesize_speech
+from tts.tts_service import synthesize_speech as tts_synthesize
 
 from python_app.services.market_data_service import fetch_watchlist_intraday_data
+from python_app.utils.json_parser import parse_gemini_json_response
+from utils.cache_utils import cache_gemini_response
+from utils.retry_utils import retry_on_api_error, retry_with_backoff
+from utils.metrics import time_operation, increment_counter
+
+# Initialize error tracking (optional, fails gracefully if not configured)
+try:
+    from utils.error_tracking import capture_exception, set_user_context
+    _error_tracking_available = True
+except ImportError:
+    _error_tracking_available = False
+    def capture_exception(*args, **kwargs): pass
+    def set_user_context(*args, **kwargs): pass
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +261,8 @@ Ensure all text is professional, actionable, and tailored for an active day trad
     return prompt
 
 
+@cache_gemini_response(ttl_hours=24)  # Cache for 24 hours
+@retry_on_api_error(max_retries=3)  # Retry on API errors
 def _generate_report_text(
     trading_date: str,
     market_data: dict,
@@ -267,35 +287,37 @@ def _generate_report_text(
     # Build prompt
     prompt = _build_gemini_prompt(trading_date, market_data, news_items, macro_context)
 
-    # Generate response
+    # Generate response with retry logic
     response = model.generate_content(prompt)
 
     if not response.text:
-        raise RuntimeError("Gemini returned empty response")
+        logger.error("Gemini returned empty response for trading_date=%s", trading_date)
+        raise RuntimeError(
+            f"Gemini returned empty response for trading date {trading_date}. "
+            "This may indicate an API issue or model error."
+        )
 
-    # Parse JSON response
-    text = response.text.strip()
-
-    # Remove markdown code blocks if present
-    if text.startswith("```json"):
-        text = text[7:]
-    if text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
-    text = text.strip()
-
+    # Parse JSON response using enhanced parser
     try:
-        report_data = json.loads(text)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Failed to parse Gemini response as JSON: {e}\nResponse: {text[:500]}")
+        report_data = parse_gemini_json_response(response.text)
+    except RuntimeError as e:
+        if _error_tracking_available:
+            capture_exception(
+                e,
+                tags={"component": "gemini_parsing", "trading_date": trading_date},
+                context={"prompt_length": len(prompt)}
+            )
+        logger.error("JSON parsing failed for trading_date=%s: %s", trading_date, str(e))
+        raise RuntimeError(f"Failed to parse Gemini response: {e}")
 
     # Validate required fields
     required_fields = ["summary_text", "key_insights"]
     for field in required_fields:
         if field not in report_data:
+            logger.error("Missing required field '%s' in response for trading_date=%s", field, trading_date)
             raise RuntimeError(f"Gemini response missing required field: {field}")
 
+    logger.debug("Successfully parsed Gemini response for trading_date=%s", trading_date)
     return report_data
 
 
@@ -415,8 +437,8 @@ def _generate_and_store_audio_for_report(
     reports_bucket_name: str,
 ) -> tuple[bytes, str]:
     """
-    Uses Gemini TTS to synthesize audio from the summary_text and stores it
-    in the configured Cloud Storage bucket.
+    Uses TTS service (Eleven Labs primary, Gemini fallback) to synthesize audio 
+    from the summary_text and stores it in the configured Cloud Storage bucket.
 
     Returns:
         (audio_bytes, gcs_path)
@@ -426,19 +448,34 @@ def _generate_and_store_audio_for_report(
     local_artifacts_dir.mkdir(parents=True, exist_ok=True)
     local_wav_path = local_artifacts_dir / f"{client_id}_{trading_date.isoformat()}.wav"
 
-    # 1. Generate audio bytes (and save locally)
-    audio_bytes = synthesize_speech(summary_text, output_path=str(local_wav_path))
+    # 1. Generate audio bytes using TTS service abstraction (with automatic fallback)
+    try:
+        audio_bytes, provider_used = tts_synthesize(
+            summary_text,
+            output_path=str(local_wav_path)
+        )
+        logger.info(
+            "TTS audio generated using provider: %s (%d bytes)",
+            provider_used,
+            len(audio_bytes)
+        )
+    except Exception as e:
+        logger.error("TTS generation failed with all providers: %s", str(e), exc_info=True)
+        raise
 
-    # 2. Upload to Cloud Storage
-    storage_client = get_storage_client()
-    bucket = storage_client.bucket(reports_bucket_name)
+    # 2. Upload to Cloud Storage with retry logic
+    @retry_with_backoff(max_retries=3, initial_delay=1.0)
+    def _upload_audio():
+        storage_client = get_storage_client()
+        bucket = storage_client.bucket(reports_bucket_name)
 
-    # Example object name: reports/michael_brooks/2025-12-03/report.wav
-    object_name = f"reports/{client_id}/{trading_date.isoformat()}/report.wav"
-    blob = bucket.blob(object_name)
-    blob.upload_from_string(audio_bytes, content_type="audio/wav")
-
-    audio_gcs_path = f"gs://{reports_bucket_name}/{object_name}"
+        # Example object name: reports/michael_brooks/2025-12-03/report.wav
+        object_name = f"reports/{client_id}/{trading_date.isoformat()}/report.wav"
+        blob = bucket.blob(object_name)
+        blob.upload_from_string(audio_bytes, content_type="audio/wav")
+        return f"gs://{reports_bucket_name}/{object_name}"
+    
+    audio_gcs_path = _upload_audio()
     return audio_bytes, audio_gcs_path
 
 
@@ -510,16 +547,18 @@ def generate_and_store_daily_report(
     - Attempts audio via Gemini TTS (but does NOT fail the whole pipeline if TTS fails)
     - Stores audio file in Cloud Storage and updates Firestore with the GCS path if successful
     """
-    # 1. Generate text with Gemini
+    # 1. Generate text with Gemini (with performance tracking)
     logger.info("Generating report text for client=%s date=%s", client_id, trading_date.isoformat())
-    summary_text, key_insights, market_context_text = _generate_gemini_text_report(
-        trading_date=trading_date,
-        client_id=client_id,
-        market_data=market_data,
-        news_items=news_items,
-        macro_context=macro_context,
-    )
+    with time_operation("report_generation.gemini_text", tags={"client_id": client_id}):
+        summary_text, key_insights, market_context_text = _generate_gemini_text_report(
+            trading_date=trading_date,
+            client_id=client_id,
+            market_data=market_data,
+            news_items=news_items,
+            macro_context=macro_context,
+        )
     logger.info("Report text generated successfully for client=%s date=%s", client_id, trading_date.isoformat())
+    increment_counter("reports.generated", tags={"client_id": client_id})
 
     # 2. Persist report (Firestore doc creation/update)
     firestore_client = get_firestore_client()
@@ -551,27 +590,40 @@ def generate_and_store_daily_report(
     }
     
     logger.info("Storing report in Firestore for client=%s date=%s", client_id, trading_date.isoformat())
-    create_or_update_daily_report(report_data)
+    
+    # Retry Firestore write operations (with performance tracking)
+    @retry_with_backoff(max_retries=3, initial_delay=1.0)
+    def _store_report():
+        with time_operation("report_generation.firestore_write", tags={"client_id": client_id}):
+            create_or_update_daily_report(report_data)
+    
+    _store_report()
     logger.info("Report stored successfully in Firestore for client=%s date=%s", client_id, trading_date.isoformat())
 
     # 3. Try TTS, but don't kill the whole pipeline if it fails
     audio_gcs_path: str | None = None
+    tts_provider_used: str | None = None
 
     try:
         logger.info("Attempting TTS generation for client=%s date=%s", client_id, trading_date.isoformat())
         reports_bucket_name = get_reports_bucket_name()
-        audio_bytes, audio_gcs_path = _generate_and_store_audio_for_report(
-            trading_date=trading_date,
-            client_id=client_id,
-            summary_text=summary_text,
-            reports_bucket_name=reports_bucket_name,
-        )
-
+        
+        # Track TTS generation performance
+        with time_operation("report_generation.tts", tags={"client_id": client_id}):
+            audio_bytes, tts_provider_used = _generate_and_store_audio_for_report(
+                trading_date=trading_date,
+                client_id=client_id,
+                summary_text=summary_text,
+                reports_bucket_name=reports_bucket_name,
+            )
+        
+        increment_counter("tts.generated", tags={"provider": tts_provider_used, "client_id": client_id})
         logger.info(
-            "Successfully generated TTS audio for client=%s date=%s at %s",
+            "Successfully generated TTS audio for client=%s date=%s at %s (provider: %s)",
             client_id,
             trading_date.isoformat(),
             audio_gcs_path,
+            tts_provider_used,
         )
 
         # Update report with audio path
@@ -582,6 +634,13 @@ def generate_and_store_daily_report(
         logger.info("Updated Firestore with audio path for client=%s date=%s", client_id, trading_date.isoformat())
 
     except Exception as exc:
+        # Capture to error tracking if available
+        if _error_tracking_available:
+            capture_exception(
+                exc,
+                tags={"component": "tts", "client_id": client_id},
+                context={"trading_date": trading_date.isoformat()}
+            )
         # Log the error but keep the text report
         logger.error(
             "TTS generation failed for client=%s date=%s: %s",
@@ -591,7 +650,46 @@ def generate_and_store_daily_report(
             exc_info=True,
         )
 
-    # 4. Return a consolidated view
+    # 4. Send email if configured (optional)
+    email_sent = False
+    try:
+        from utils.email_service import send_report_email
+        from report_repository import get_client
+        
+        # Get client email
+        client_doc = get_client(client_id)
+        if client_doc and client_doc.get("email"):
+            result_data = {
+                "client_id": client_id,
+                "trading_date": trading_date.isoformat(),
+                "summary_text": summary_text,
+                "key_insights": key_insights,
+                "market_context": market_context_text,
+                "tickers": watchlist if 'watchlist' in locals() else []
+            }
+            email_sent = send_report_email(
+                to_emails=[client_doc["email"]],
+                report_data=result_data,
+                trading_date=trading_date.isoformat()
+            )
+            
+            # Update email status
+            from report_repository import update_daily_report_email_status
+            status = "sent" if email_sent else "failed"
+            update_daily_report_email_status(trading_date.isoformat(), status)
+            logger.info("Email status updated to %s for client=%s date=%s", status, client_id, trading_date.isoformat())
+    except ImportError:
+        logger.debug("Email service not available")
+    except Exception as e:
+        logger.error("Failed to send email: %s", str(e), exc_info=True)
+        # Update status to failed
+        try:
+            from report_repository import update_daily_report_email_status
+            update_daily_report_email_status(trading_date.isoformat(), "failed")
+        except Exception:
+            pass
+    
+    # 5. Return a consolidated view
     return {
         "client_id": client_id,
         "trading_date": trading_date.isoformat(),
@@ -599,7 +697,9 @@ def generate_and_store_daily_report(
         "key_insights": key_insights,
         "market_context": market_context_text,
         "audio_gcs_path": audio_gcs_path,
+        "tts_provider": tts_provider_used,  # Track which TTS provider was used
         "report_id": trading_date.isoformat(),  # Use trading_date as document ID
+        "email_sent": email_sent,
     }
 
 

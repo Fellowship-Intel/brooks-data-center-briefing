@@ -1,62 +1,69 @@
-name: Build and Deploy
+name: Deploy to Cloud Run
 
 on:
   push:
     branches:
       - main
-      - master
-  pull_request:
-    branches:
-      - main
-      - master
+      - production
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_REGION: us-central1
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
         with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build application
-        run: npm run build
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-
-      - name: Check build output
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+      
+      - name: Authenticate Docker
+        run: gcloud auth configure-docker
+      
+      - name: Determine environment
+        id: env
         run: |
-          if [ ! -d "dist" ]; then
-            echo "Build failed: dist directory not found"
-            exit 1
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/production" ]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+          else
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
           fi
-          echo "Build successful"
-
-  docker-build:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
+      
       - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: false
-          tags: brooks-briefing:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
+        run: |
+          IMAGE_NAME="gcr.io/$PROJECT_ID/brooks-briefing:${{ steps.env.outputs.environment }}"
+          docker build -t $IMAGE_NAME .
+          docker push $IMAGE_NAME
+      
+      - name: Deploy to Cloud Run
+        run: |
+          SERVICE_NAME="brooks-briefing-${{ steps.env.outputs.environment }}"
+          gcloud run deploy $SERVICE_NAME \
+            --image gcr.io/$PROJECT_ID/brooks-briefing:${{ steps.env.outputs.environment }} \
+            --platform managed \
+            --region $GCP_REGION \
+            --allow-unauthenticated \
+            --set-env-vars ENVIRONMENT=${{ steps.env.outputs.environment }} \
+            --memory 2Gi \
+            --cpu 2 \
+            --timeout 300 \
+            --max-instances 10
