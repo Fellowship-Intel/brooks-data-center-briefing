@@ -14,7 +14,8 @@ def mock_gemini():
     real_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     
     with patch("report_service.access_secret_value") as mock_secret, \
-         patch("report_service.genai.GenerativeModel") as mock_model_class:
+         patch("report_service.genai.GenerativeModel") as mock_model_class, \
+         patch("python_app.services.gemini_client.create_gemini_model") as mock_create_model:
         
         # Mock secret manager to return the real API key from environment
         # This allows genai.configure() to use the real key
@@ -27,6 +28,7 @@ def mock_gemini():
         # Mock the Gemini model (so we don't make real API calls)
         mock_model = MagicMock()
         mock_model_class.return_value = mock_model
+        mock_create_model.return_value = mock_model
         
         # Mock the generate_content response
         mock_response = MagicMock()
@@ -67,10 +69,12 @@ def mock_firestore():
 def mock_storage():
     """Mock Cloud Storage bucket + blob.upload_from_string."""
     with patch("report_service.get_storage_client") as mock_client, \
-         patch("report_service.get_reports_bucket_name") as mock_bucket_name:
+         patch("report_service.get_config") as mock_get_config:
         
-        # Mock bucket name
-        mock_bucket_name.return_value = "test-reports-bucket"
+        # Mock bucket name via config
+        mock_config = MagicMock()
+        mock_config.reports_bucket_name = "test-reports-bucket"
+        mock_get_config.return_value = mock_config
         
         storage_client = MagicMock()
         mock_client.return_value = storage_client
@@ -85,7 +89,7 @@ def mock_storage():
             "client": storage_client,
             "bucket": bucket,
             "blob": blob,
-            "mock_bucket_name": mock_bucket_name,
+            "mock_config": mock_config,
         }
 
 

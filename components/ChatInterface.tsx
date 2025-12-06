@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { sendChatMessage } from '../services/geminiService';
-import { ChatMessage } from '../types';
+import { ChatMessage, AppError, getErrorMessage } from '../types';
 import { Send, User, Bot, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
@@ -29,15 +29,17 @@ const ChatInterface: React.FC = () => {
       const response = await sendChatMessage(userMsg.text);
       const botMsg: ChatMessage = { role: 'model', text: response };
       setMessages(prev => [...prev, botMsg]);
-    } catch (error: any) {
-        setMessages(prev => [...prev, { role: 'model', text: `Error: ${error.message}` }]);
+    } catch (error: unknown) {
+        const err = error as AppError;
+        const errorMsg = getErrorMessage(err);
+        setMessages(prev => [...prev, { role: 'model', text: `Error: ${errorMsg}` }]);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="flex flex-col h-full border-l border-slate-800 bg-slate-950 w-full md:w-96 shrink-0">
+    <div className="flex flex-col h-full border-t border-slate-800 bg-slate-950 w-full">
       <div className="p-4 border-b border-slate-800 bg-slate-900/50">
         <h3 className="font-bold text-slate-200">Analyst Q&A</h3>
         <p className="text-xs text-slate-500">Ask about today's data</p>

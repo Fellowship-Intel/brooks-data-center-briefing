@@ -12,6 +12,15 @@ This is a Python-based daily trading report generation system for Michael Brooks
 
 **Current Status:** ✅ **PRODUCTION-READY** - All 8 improvement phases completed. Core pipeline working, multiple deployment options available, enhanced desktop UI with custom theming, comprehensive performance optimizations, robust security features, advanced data visualization, bulk operations, search/filter capabilities, desktop notifications, enhanced report viewer with bookmarking and comparison, watchlist categorization, customizable report settings, help center, and comprehensive testing infrastructure.
 
+**Recent Upgrades (Dec 2025):**
+- **Consolidated Backend:** Unified service layer for Streamlit and FastAPI.
+- **Secure Auth:** Google OAuth2 authentication implemented.
+- **Infrastructure:** Terraform configuration added.
+- **Mobile:** Responsive CSS added.
+- **Dashboard:** Real-time "Market Pulse" added.
+- **Email Alerts:** Integrated SMTP for price/change alerts (Replaced SMS).
+- **Performance:** Implemented parallel processing for faster reports.
+
 ---
 
 ## Architecture Overview
@@ -98,6 +107,11 @@ This is a Python-based daily trading report generation system for Michael Brooks
    - Three report views (Top Movers, Deep Dive, Full Narrative)
    - Enhanced styling with green accent colors (#10b981)
    - Desktop-optimized layout with custom CSS (max-width, padding, responsive columns)
+   - **Mobile-optimized** with responsive media queries
+   - **Real-time Dashboard** with Market Pulse (RVOL, Gap%, Range)
+   - **Secure Login** via Google OAuth2
+   - **SMS Alerts** via Twilio integration
+   - **High Performance** via batched data & parallel execution
    - ✅ **Watchlist feature with Firestore persistence and categorization** (NEW)
    - ✅ **Performance optimizations** (file watching disabled, fast reruns)
    - ✅ **Report History Viewer** with pagination, search, and filtering (NEW)
@@ -653,6 +667,24 @@ The `SYSTEM_INSTRUCTION` constant contains detailed instructions for Gemini on:
 
 ## Testing Strategy
 
+### Stress Testing
+
+The application includes a comprehensive stress testing suite to validate performance under load:
+
+- **API Endpoint Stress Tests**: Concurrent health checks, report generation, and rate limiting validation
+- **Report Generation Stress Tests**: Large watchlist processing (100+ tickers), concurrent report generations
+- **Database Query Stress Tests**: Concurrent Firestore reads, large dataset query performance (1000+ reports)
+- **Integration Stress Tests**: Full workflow testing (generate → save → retrieve) under load
+
+**Stress Testing Tools:**
+- `tests/test_stress.py`: Comprehensive pytest-based stress test suite
+- `scripts/stress_test.py`: Standalone CLI tool with metrics collection and report generation
+- `scripts/load_test.sh` / `scripts/load_test.ps1`: Shell scripts for easy test execution
+
+**Documentation:** See `docs/STRESS_TESTING.md` for complete stress testing guide.
+
+## Testing Strategy (Legacy)
+
 ### Unit Tests
 
 **File:** `tests/conftest.py`  
@@ -915,6 +947,7 @@ uvicorn app.main:app --reload  # API
 - `tests/test_progress_tracker.py` - Progress tracker component tests
 - `tests/test_keyboard_shortcuts.py` - Keyboard shortcuts tests
 - `tests/test_integration_e2e.py` - End-to-end integration tests
+- `tests/test_stress.py` - Comprehensive stress testing suite (API, report generation, database, integration)
 
 ### Scripts
 - `scripts/run_api_locally.ps1` / `.sh` - Run API locally
@@ -923,6 +956,8 @@ uvicorn app.main:app --reload  # API
 - `scripts/deploy_cloud_run.ps1` / `.sh` - Deploy to Cloud Run
 - `scripts/deploy.ps1` / `.sh` - Enhanced deployment scripts
 - `scripts/scheduled_report.py` - Scheduled report generation
+- `scripts/stress_test.py` - Standalone stress test runner with CLI and metrics collection
+- `scripts/load_test.sh` / `scripts/load_test.ps1` - Load testing scripts
 
 ---
 
@@ -1032,7 +1067,19 @@ logging.basicConfig(level=logging.INFO)
 
 ## Version History
 
-- **2025-01-27:** All 8 Improvement Phases Completed - Production Ready
+- **2025-01-27:** Client Portal Redesign & Stress Testing Suite
+  - ✅ Redesigned UI as client portal (removed developer tools from production)
+  - ✅ Implemented user-friendly error messages utility (`utils/user_messages.py`)
+  - ✅ Fixed auto-load report functionality with better error handling
+  - ✅ Hidden developer tools (System Health, Keyboard Shortcuts, Notification Settings) behind ENVIRONMENT flag
+  - ✅ Replaced all technical error messages with user-friendly messages throughout UI
+  - ✅ Created comprehensive stress testing suite (`tests/test_stress.py`)
+  - ✅ Added standalone stress test runner with CLI and metrics collection (`scripts/stress_test.py`)
+  - ✅ Created load test scripts for bash and PowerShell (`scripts/load_test.sh`, `scripts/load_test.ps1`)
+  - ✅ Added stress testing documentation (`docs/STRESS_TESTING.md`)
+  - ✅ Updated configuration to support environment-based developer tools visibility
+
+- **2025-01-27 (Earlier):** All 8 Improvement Phases Completed - Production Ready
   - ✅ **Phase I:** Centralized configuration system, custom exceptions, standardized error handling
   - ✅ **Phase II:** Comprehensive type hints, code deduplication, improved organization
   - ✅ **Phase III:** Multi-level caching, Firestore query optimization, rate limiting

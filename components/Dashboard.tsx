@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Activity, TrendingUp, Clock, FileText, AlertCircle, CheckCircle2, RefreshCw } from 'lucide-react';
 import { ErrorDisplay } from './ErrorDisplay';
 import { logger } from '../utils/logger';
+import { AppError, getErrorMessage } from '../types';
 
 interface DashboardStats {
   totalReports: number;
@@ -21,6 +22,21 @@ interface ActivityItem {
 interface HealthStatus {
   status: string;
   components: Record<string, { status: string; error?: string }>;
+}
+
+/**
+ * Interface for report data returned from the API
+ */
+interface ApiReport {
+  trading_date: string;
+  client_id?: string;
+  audio_gcs_path?: string;
+  tts_provider?: string;
+  summary_text?: string;
+  key_insights?: string[];
+  market_context?: string;
+  raw_payload?: any;
+  [key: string]: any; // Allow additional fields
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_URL;
@@ -71,9 +87,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ onGenerateReport }) => {
           },
         });
         clearTimeout(timeoutId);
-      } catch (fetchErr: any) {
+      } catch (fetchErr: unknown) {
         clearTimeout(timeoutId);
-        if (fetchErr.name === 'AbortError') {
+        const error = fetchErr as AppError;
+        if (error instanceof Error && error.name === 'AbortError') {
           throw new Error('Request timeout - the server took too long to respond');
         }
         throw fetchErr;
@@ -83,12 +100,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onGenerateReport }) => {
       
       if (response.ok) {
         const data = await response.json();
-        const reports = data.reports || [];
+        const reports: ApiReport[] = data.reports || [];
         
         logger.debug(`[Dashboard] Received ${reports.length} reports`);
         
         const totalReports = reports.length;
-        const reportsWithAudio = reports.filter((r: any) => r.audio_gcs_path).length;
+        const reportsWithAudio = reports.filter((r: ApiReport) => r.audio_gcs_path).length;
         const ttsSuccessRate = totalReports > 0 ? (reportsWithAudio / totalReports * 100) : 0;
         const lastReport = reports.length > 0 ? reports[0] : null;
         
@@ -100,7 +117,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onGenerateReport }) => {
         });
 
         // Format activity
-        const activityItems: ActivityItem[] = reports.slice(0, 10).map((report: any) => ({
+        const activityItems: ActivityItem[] = reports.slice(0, 10).map((report: ApiReport) => ({
           date: report.trading_date,
           client: report.client_id || 'Unknown',
           ttsProvider: report.tts_provider || 'N/A',
@@ -119,18 +136,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ onGenerateReport }) => {
         }
         throw new Error(errorMessage);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       logger.error('[Dashboard] Error fetching dashboard data:', err);
       
-      let errorMessage = err.message || 'Failed to fetch dashboard data';
-      let errorDetails: any = { originalError: err };
+      const error = err as AppError;
+      let errorMessage = getErrorMessage(error) || 'Failed to fetch dashboard data';
+      const errorDetails: { originalError: AppError; networkError?: boolean; corsError?: boolean } = { originalError: error };
       
-      if (err.message?.includes('timeout')) {
+      if (errorMessage.includes('timeout')) {
         errorMessage = 'Connection timeout - the server may be slow or unreachable';
-      } else if (err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError')) {
+      } else if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
         errorMessage = 'Network error - unable to connect to the API server';
         errorDetails.networkError = true;
-      } else if (err.message?.includes('CORS')) {
+      } else if (errorMessage.includes('CORS')) {
         errorMessage = 'CORS error - the API server may not be configured to allow requests from this origin';
         errorDetails.corsError = true;
       }
@@ -263,31 +281,33 @@ export const Dashboard: React.FC<DashboardProps> = ({ onGenerateReport }) => {
       )}
 
       {/* Recent Activity */}
-      <div className="bg-slate-800 rounded-lg p-6 border border-slate-700">
-        <h2 className="text-xl font-bold text-emerald-500 mb-4">Recent Activity</h2>
-        <div className="space-y-3">
-          {activity.length > 0 ? (
-            activity.map((item) => (
-              <div
-                key={item.id}
-                className="flex items-center justify-between p-4 bg-slate-900 rounded-lg border border-slate-700"
-              >
-                <div className="flex items-center gap-4 flex-1">
-                  <span className="text-emerald-500 font-medium">{item.date}</span>
-                  <span className="text-slate-400">{item.client}</span>
-                  <span className="text-slate-400">TTS: {item.ttsProvider}</span>
-                  <span className="text-lg">{statusEmoji[item.status]}</span>
+      {stats.totalReports > 0 && (
+        <div className="bg-slate-800 rounded-lg p-6 border border-slate-700">
+          <h2 className="text-xl font-bold text-emerald-500 mb-4">Recent Activity</h2>
+          <div className="space-y-3">
+            {activity.length > 0 ? (
+              activity.map((item) => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between p-4 bg-slate-900 rounded-lg border border-slate-700"
+                >
+                  <div className="flex items-center gap-4 flex-1">
+                    <span className="text-emerald-500 font-medium">{item.date}</span>
+                    <span className="text-slate-400">{item.client}</span>
+                    <span className="text-slate-400">TTS: {item.ttsProvider}</span>
+                    <span className="text-lg">{statusEmoji[item.status]}</span>
+                  </div>
+                  <button className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors">
+                    View
+                  </button>
                 </div>
-                <button className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors">
-                  View
-                </button>
-              </div>
-            ))
-          ) : (
-            <p className="text-slate-400">No recent activity to display.</p>
-          )}
+              ))
+            ) : (
+              <p className="text-slate-400">No recent activity to display.</p>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* System Health */}
       <div className="bg-slate-800 rounded-lg p-6 border border-slate-700">

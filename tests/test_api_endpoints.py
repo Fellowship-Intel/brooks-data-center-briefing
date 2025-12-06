@@ -14,11 +14,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.dependencies import get_current_user
 
 
 @pytest.fixture
 def client():
     """Create a test client for the FastAPI app."""
+    # Override auth dependency
+    app.dependency_overrides[get_current_user] = lambda: {"email": "michael_brooks", "sub": "test_user"}
     return TestClient(app)
 
 
@@ -42,7 +45,7 @@ def test_generate_report(
     """Test generating a report using dummy data."""
     response = client.post(
         "/reports/generate",
-        json={},
+        json={"trading_date": "2025-01-27"},
     )
     
     assert response.status_code == 200
@@ -62,7 +65,7 @@ def test_fetch_report(
 ) -> None:
     """Test fetching a previously generated report."""
     # First generate a report
-    generate_response = client.post("/reports/generate", json={})
+    generate_response = client.post("/reports/generate", json={"trading_date": "2025-01-27"})
     assert generate_response.status_code == 200
     trading_date = generate_response.json().get("trading_date")
     
@@ -91,7 +94,7 @@ def test_fetch_audio_metadata(
 ) -> None:
     """Test fetching audio metadata for a report."""
     # First generate a report
-    generate_response = client.post("/reports/generate", json={})
+    generate_response = client.post("/reports/generate", json={"trading_date": "2025-01-27"})
     assert generate_response.status_code == 200
     trading_date = generate_response.json().get("trading_date")
     

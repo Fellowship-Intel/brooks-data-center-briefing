@@ -1,0 +1,4 @@
+Analyze the currently open file.
+1. Identify any violations of the DRY (Don't Repeat Yourself) principle.
+2. Identify any hardcoded strings that should be constants or config variables.
+3. Create a refactor plan to modularize this code without changing its external behavior.

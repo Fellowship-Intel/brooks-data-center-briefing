@@ -13,6 +13,8 @@ DEFAULT_WATCHLIST: List[str] = _config.default_watchlist
 
 DEFAULT_CLIENT_ID = _config.default_client_id
 
+APP_TITLE = "Brooks Data Center Daily Briefing"
+
 
 SYSTEM_INSTRUCTION = """
 You are the analysis and conversation engine powering the **Michael Brooks Data Center Daily Briefing & Q&A App**, used by a single end-user (Michael Brooks) on his home computer via Google AI Studio.

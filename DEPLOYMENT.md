@@ -42,7 +42,7 @@ GEMINI_API_KEY=your_api_key_here
    npm run preview
    ```
 
-The preview will be available at `http://localhost:3000`
+The preview will be available at `http://localhost:8080`
 
 ## Docker Deployment
 

@@ -10,6 +10,19 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
+        proxy: {
+          '/api': {
+            target: 'http://localhost:8000',
+            changeOrigin: true,
+            rewrite: (path) => path.replace(/^\/api/, '')
+          },
+          '/health': 'http://localhost:8000',
+          '/reports': 'http://localhost:8000',
+          '/chat': 'http://localhost:8000'
+        },
+        hmr: {
+          overlay: true,
+        },
       },
       plugins: [react()],
       define: {
@@ -31,13 +44,12 @@ export default defineConfig(({ mode }) => {
           output: {
             manualChunks: {
               vendor: ['react', 'react-dom'],
-              genai: ['@google/genai'],
             }
           }
         }
       },
       preview: {
-        port: 3000,
+        port: 8080,
         host: '0.0.0.0',
       }
     };

@@ -45,5 +45,12 @@ Write-Host ""
 Write-Host "Press Ctrl+C to stop the server" -ForegroundColor Yellow
 Write-Host ""
 
+# OAuth credentials configured - using Google Sign-In
+# To enable dev mode, uncomment: $env:ENVIRONMENT = "development"
+
 streamlit run app.py --server.port=8080 --server.address=0.0.0.0
+
+
+
+
 

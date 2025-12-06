@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { InputData } from '../types';
+import { InputData, AppError, getErrorMessage } from '../types';
 import { SAMPLE_INPUT } from '../constants';
 import { FileText, Database, TrendingUp, Info, AlertCircle, Settings } from 'lucide-react';
 
@@ -46,8 +46,10 @@ const InputForm: React.FC<InputFormProps> = ({ onSubmit, isLoading }) => {
         return { valid: false, error: `${fieldName} must be a JSON array` };
       }
       return { valid: true, formatted: JSON.stringify(parsed, null, 2) };
-    } catch (e: any) {
-      return { valid: false, error: `Invalid JSON in ${fieldName}: ${e.message}` };
+    } catch (e: unknown) {
+      const error = e as AppError;
+      const errorMsg = getErrorMessage(error);
+      return { valid: false, error: `Invalid JSON in ${fieldName}: ${errorMsg}` };
     }
   };
 
@@ -148,8 +150,10 @@ const InputForm: React.FC<InputFormProps> = ({ onSubmit, isLoading }) => {
         macro_context: macroContext,
         constraints_or_notes: constraints,
       });
-    } catch (e: any) {
-      setJsonError(e.message || "Invalid data provided. Please check all fields.");
+    } catch (e: unknown) {
+      const error = e as AppError;
+      const errorMsg = getErrorMessage(error);
+      setJsonError(errorMsg || "Invalid data provided. Please check all fields.");
     }
   };
 

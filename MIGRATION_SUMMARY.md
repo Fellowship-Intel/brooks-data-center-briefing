@@ -76,7 +76,7 @@ The following components from the original plan still need implementation:
 ## Architecture
 
 - **Backend**: Node.js/Express API (port 8000)
-- **Frontend**: React (port 3000) + Streamlit (port 8080)
+- **Frontend**: React (port 8080) + Streamlit (port 8501)
 - **Database**: Google Cloud Firestore
 - **Storage**: Google Cloud Storage
 - **TTS**: Eleven Labs (primary) + Gemini (fallback)

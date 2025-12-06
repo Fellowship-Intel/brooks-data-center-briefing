@@ -83,7 +83,7 @@ def get_project_id() -> str:
 
     Priority:
     1. GCP_PROJECT_ID environment variable
-    2. Centralized configuration default
+    2. Default project ID "mikebrooks"
 
     Returns:
         The resolved project ID as a string.
@@ -91,9 +91,9 @@ def get_project_id() -> str:
     Raises:
         RuntimeError: If no project ID can be resolved.
     """
-    from config import get_config
-    config = get_config()
-    project_id = os.getenv("GCP_PROJECT_ID", config.gcp_project_id)
+    # Avoid circular import - don't import config here
+    # Use environment variable or default directly
+    project_id = os.getenv("GCP_PROJECT_ID", "mikebrooks")
     if not project_id:
         raise RuntimeError(
             "GCP_PROJECT_ID is not set and no default project ID is defined."

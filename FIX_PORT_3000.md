@@ -1,8 +1,8 @@
-# Fix "Connection Refused" on Port 3000
+# Fix "Connection Refused" on Port 8080
 
 ## The Problem
 
-Port 3000 is used by the **React/Vite web app**, which requires:
+Port 8080 is used by the **React/Vite web app**, which requires:
 - Node.js installed
 - Dev server running (`npm run dev`)
 
@@ -25,7 +25,7 @@ npm run dev
 ```
 
 **Step 4: Open browser**
-- Go to `http://localhost:3000`
+- Go to `http://localhost:8080`
 
 ### Option 2: Use Flask App Instead (No Node.js needed!)
 
@@ -42,7 +42,7 @@ python app_flask.py
 ```
 
 **Step 3: Open browser**
-- Go to `http://localhost:5000` (NOT 3000!)
+- Go to `http://localhost:5000` (NOT 8080!)
 
 ### Option 3: Use Streamlit App
 
@@ -57,7 +57,7 @@ streamlit run app.py
 ```
 
 **Step 3: Open browser**
-- Go to `http://localhost:8501` (NOT 3000!)
+- Go to `http://localhost:8501` (NOT 8080!)
 
 ### Option 4: Use Local Terminal Version
 
@@ -73,7 +73,7 @@ Runs entirely in terminal - no browser, no ports!
 
 | App | Port | Needs Node.js? | Command |
 |-----|------|----------------|---------|
-| React/Vite | 3000 | ✅ Yes | `npm run dev` |
+| React/Vite | 8080 | ✅ Yes | `npm run dev` |
 | Flask | 5000 | ❌ No | `python app_flask.py` |
 | Streamlit | 8501 | ❌ No | `streamlit run app.py` |
 | Local Terminal | None | ❌ No | `python run_local.py` |
@@ -99,7 +99,7 @@ Runs entirely in terminal - no browser, no ports!
    python run_local.py
    ```
 
-## Troubleshooting Port 3000
+## Troubleshooting Port 8080
 
 **If you want to use the React app:**
 
@@ -113,13 +113,13 @@ Runs entirely in terminal - no browser, no ports!
    - Look for a terminal running `npm run dev`
    - If not running, start it: `npm run dev`
 
-3. **Check if port 3000 is in use:**
+3. **Check if port 8080 is in use:**
    ```powershell
-   netstat -ano | findstr :3000
+   netstat -ano | findstr :8080
    ```
-   If something else is using it, either:
+   If something else is using it (e.g., Streamlit backend), either:
    - Stop that process
-   - Or change port in `vite.config.ts` (change `port: 3000` to another port)
+   - Or change port in `vite.config.ts` (change `port: 8080` to another port)
 
 ## Recommended Solution
 
@@ -130,5 +130,5 @@ pip install -r requirements_flask.txt
 python app_flask.py
 ```
 
-Then visit: **http://localhost:5000** (not 3000!)
+Then visit: **http://localhost:5000** (not 8080!)
 

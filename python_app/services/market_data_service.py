@@ -39,9 +39,11 @@ def _fetch_watchlist_intraday_data_uncached(
             "ticker",
             "last_price",
             "prev_close",
+            "open",
             "change_pct",
             "intraday_volatility",
             "volume",
+            "average_volume",
         ])
 
     logger.info(
@@ -67,6 +69,9 @@ def _fetch_watchlist_intraday_data_uncached(
         prev_close = info.get("previousClose")
         volume = info.get("regularMarketVolume") or info.get("volume")
 
+        open_price = info.get("regularMarketOpen") or info.get("open")
+        avg_volume = info.get("averageDailyVolume10Day") or info.get("averageVolume")
+
         if last_price is not None and prev_close:
             change_pct = (last_price - prev_close) / prev_close * 100.0
         else:
@@ -85,9 +90,13 @@ def _fetch_watchlist_intraday_data_uncached(
                 "ticker": ticker,
                 "last_price": last_price,
                 "prev_close": prev_close,
+                "open": open_price,
                 "change_pct": change_pct,
+                "day_high": day_high,
+                "day_low": day_low,
                 "intraday_volatility": intraday_volatility,
                 "volume": volume,
+                "average_volume": avg_volume,
             }
         )
 
@@ -115,9 +124,13 @@ def fetch_watchlist_intraday_data(
     - ticker
     - last_price
     - prev_close
+    - open
     - change_pct
+    - day_high
+    - day_low
     - intraday_volatility
     - volume
+    - average_volume
     """
     # Convert to hashable types for caching
     tickers = [t.upper() for t in watchlist]

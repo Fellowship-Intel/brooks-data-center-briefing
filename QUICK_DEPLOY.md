@@ -33,7 +33,7 @@ npm run build
 npm run preview
 ```
 
-Visit `http://localhost:3000` to verify everything works.
+Visit `http://localhost:8080` to verify everything works.
 
 ## Deployment Options
 

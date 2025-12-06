@@ -1,27 +1,35 @@
-# Dockerfile for FastAPI API service
+# Dockerfile.api (Production)
 FROM python:3.11-slim
 
-# Install system deps
+# Install system dependencies
+#  - build-essential: for compiling C extensions
+#  - curl: for healthchecks
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    curl \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install Python deps
+# Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install gunicorn uvicorn
 
-# Copy only the code needed for the API
-COPY python_app/ ./python_app/
-COPY app/ ./app/
-COPY gcp_clients.py report_repository.py report_service.py settings.py ./
-COPY tts/ ./tts/
+# Create a non-root user
+RUN addgroup --system appgroup && adduser --system --group appuser
+USER appuser
 
-# Cloud Run expects the service to listen on $PORT (default 8000)
+# Copy application code
+COPY --chown=appuser:appgroup python_app/ ./python_app/
+COPY --chown=appuser:appgroup app/ ./app/
+COPY --chown=appuser:appgroup gcp_clients.py report_repository.py report_service.py settings.py ./
+COPY --chown=appuser:appgroup tts/ ./tts/
+
 ENV PORT=8000
+ENV WORKERS=4
+ENV TIMEOUT=120
 
-# Default command: start FastAPI with uvicorn
-# Note: Cloud Run will override this with --command and --args
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
-
+# Command: Gunicorn with Uvicorn workers for production performance
+# Using explicit array syntax for CMD to avoid shell parsing issues
+CMD ["sh", "-c", "gunicorn app.main:app --workers ${WORKERS} --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT} --timeout ${TIMEOUT}"]

@@ -6,7 +6,7 @@ import { Dashboard } from './components/Dashboard';
 import { ErrorDisplay } from './components/ErrorDisplay';
 import { NetworkDiagnostics } from './components/NetworkDiagnostics';
 import { generateDailyReport } from './services/geminiService';
-import { InputData, DailyReportResponse, AppMode } from './types';
+import { InputData, DailyReportResponse, AppMode, MarketData, AppError, getErrorMessage } from './types';
 import { MessageSquare, Loader2, LayoutDashboard, FileText } from 'lucide-react';
 import { SAMPLE_INPUT } from './constants';
 import { logger } from './utils/logger';
@@ -17,7 +17,7 @@ const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
   const [mode, setMode] = useState<AppMode>(AppMode.INPUT);
   const [reportData, setReportData] = useState<DailyReportResponse | null>(null);
-  const [marketDataInput, setMarketDataInput] = useState<any[]>(SAMPLE_INPUT.market_data_json);
+  const [marketDataInput, setMarketDataInput] = useState<MarketData[]>(SAMPLE_INPUT.market_data_json);
   const [isLoading, setIsLoading] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
   const [showChat, setShowChat] = useState(true);
@@ -55,9 +55,10 @@ const App: React.FC = () => {
             },
           });
           clearTimeout(timeoutId);
-        } catch (fetchErr: any) {
+        } catch (fetchErr: unknown) {
           clearTimeout(timeoutId);
-          if (fetchErr.name === 'AbortError') {
+          const error = fetchErr as AppError;
+          if (error instanceof Error && error.name === 'AbortError') {
             throw new Error('Request timeout - the server took too long to respond');
           }
           throw fetchErr;
@@ -115,19 +116,20 @@ const App: React.FC = () => {
           }
           throw new Error(errorMessage);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         logger.error("[App] Failed to fetch today's report:", err);
         
         // Categorize the error
-        let errorMessage = err.message || "Failed to fetch report";
-        let errorDetails: any = { originalError: err };
+        const error = err as AppError;
+        let errorMessage = getErrorMessage(error);
+        const errorDetails: { originalError: AppError; networkError?: boolean; corsError?: boolean } = { originalError: error };
         
-        if (err.message?.includes('timeout')) {
+        if (errorMessage.includes('timeout')) {
           errorMessage = 'Connection timeout - the server may be slow or unreachable';
-        } else if (err.message?.includes('Failed to fetch') || err.message?.includes('NetworkError')) {
+        } else if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
           errorMessage = 'Network error - unable to connect to the API server';
           errorDetails.networkError = true;
-        } else if (err.message?.includes('CORS')) {
+        } else if (errorMessage.includes('CORS')) {
           errorMessage = 'CORS error - the API server may not be configured to allow requests from this origin';
           errorDetails.corsError = true;
         }
@@ -167,8 +169,9 @@ const App: React.FC = () => {
 
       setMode(AppMode.REPORT);
       setCurrentPage('report');
-    } catch (err: any) {
-      setError(err.message || "An error occurred generating the report.");
+    } catch (err: unknown) {
+      const error = err as AppError;
+      setError(getErrorMessage(error) || "An error occurred generating the report.");
     } finally {
       setIsLoading(false);
     }
@@ -292,26 +295,24 @@ const App: React.FC = () => {
             <InputForm onSubmit={handleGenerateReport} isLoading={isLoading} />
           </div>
         ) : (
-          <>
-            {/* Report View */}
-            <div
-              className={`flex-1 h-full overflow-hidden transition-all duration-300 ${showChat ? 'mr-0' : ''}`}
-            >
+          <div className="flex flex-col h-full overflow-hidden">
+            {/* Report View - takes remaining space */}
+            <div className="flex-1 overflow-hidden">
               {reportData && <ReportView data={reportData} marketData={marketDataInput} />}
             </div>
 
-            {/* Chat Sidebar */}
+            {/* Chat Interface at Bottom */}
             {showChat && (
               <div 
                 id="chat-interface"
-                className="h-full animate-in slide-in-from-right duration-300 shadow-2xl z-20 border-l border-zinc-800"
+                className="h-96 border-t border-zinc-800 bg-slate-950 animate-in slide-in-from-bottom duration-300 shadow-2xl z-20 shrink-0"
                 role="complementary"
                 aria-label="Analyst Q&A chat"
               >
                 <ChatInterface />
               </div>
             )}
-          </>
+          </div>
         )}
       </main>
     </div>

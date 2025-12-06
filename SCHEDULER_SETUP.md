@@ -1,10 +1,10 @@
 # Cloud Scheduler Setup for Daily Watchlist Reports
 
-This guide explains how to set up Cloud Scheduler to automatically generate daily watchlist reports at 3:00 AM PST/PDT.
+This guide explains how to set up Cloud Scheduler to automatically generate daily watchlist reports at 3:55 AM PST/PDT.
 
 ## Overview
 
-Cloud Scheduler will trigger the API endpoint `/reports/generate/watchlist` daily at 3:00 AM America/Los_Angeles timezone.
+Cloud Scheduler will trigger the API endpoint `/reports/generate/watchlist` daily at 3:55 AM America/Los_Angeles timezone.
 
 ## Prerequisites
 
@@ -53,7 +53,7 @@ gcloud run services add-iam-policy-binding brooks-briefing-api \
 # 4. Create the scheduler job
 gcloud scheduler jobs create http brooks-daily-watchlist \
   --location=us-central1 \
-  --schedule="0 3 * * *" \
+  --schedule="55 3 * * *" \
   --time-zone="America/Los_Angeles" \
   --uri="${API_URL}/reports/generate/watchlist" \
   --http-method=POST \
@@ -67,7 +67,7 @@ gcloud scheduler jobs create http brooks-daily-watchlist \
 
 ### Schedule
 
-- **Cron Expression**: `0 3 * * *` (3:00 AM daily)
+- **Cron Expression**: `55 3 * * *` (3:55 AM daily)
 - **Time Zone**: `America/Los_Angeles` (automatically handles PST/PDT)
 
 ### Endpoint

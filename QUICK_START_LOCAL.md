@@ -1,7 +1,7 @@
 # Quick Start - Run Locally (No Port, No Browser)
 
 ## The Problem
-If you're seeing "port 3000" errors, you're trying to run the React/Vite web app which requires a web server. 
+If you're seeing "port 8080" errors, you're trying to run the React/Vite web app which requires a web server. 
 
 ## The Solution
 Use the **Python command-line version** instead - it runs completely locally with no ports or browsers needed.
@@ -54,7 +54,7 @@ GEMINI_API_KEY=your_api_key_here
 
 | Command | What It Does | Port Needed? |
 |---------|-------------|--------------|
-| `npm run dev` | React web app | ✅ Yes (port 3000) |
+| `npm run dev` | React web app | ✅ Yes (port 8080) |
 | `streamlit run app.py` | Streamlit web app | ✅ Yes (port 8501) |
 | `python run_local.py` | **Command-line app** | ❌ **No port!** |
 

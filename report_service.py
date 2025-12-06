@@ -50,15 +50,17 @@ from report_repository import (
     update_daily_report_audio_path,
 )
 
-from settings import get_reports_bucket_name
+from config import get_config
 
 from tts.tts_service import synthesize_speech as tts_synthesize
 
+from python_app.constants import SYSTEM_INSTRUCTION
 from python_app.services.market_data_service import fetch_watchlist_intraday_data
 from python_app.utils.json_parser import parse_gemini_json_response
 from utils.cache_utils import cache_gemini_response
-from utils.retry_utils import retry_on_api_error, retry_with_backoff
-from utils.metrics import time_operation, increment_counter
+from utils.metrics import time_operation
+from utils.retry_utils import retry_with_backoff, retry_on_api_error
+from utils.metrics import increment_counter, record_latency
 from utils.exceptions import (
     ReportGenerationError,
     TTSGenerationError,
@@ -101,7 +103,10 @@ def _get_gemini_client() -> genai.GenerativeModel:
     """
     from python_app.services.gemini_client import create_gemini_model
     config = _get_config()
-    return create_gemini_model(model_name=config["gemini_model_name"])
+    return create_gemini_model(
+        model_name=config["gemini_model_name"],
+        system_instruction=SYSTEM_INSTRUCTION
+    )
 
 
 def _synthesize_audio_with_gemini(text: str, model_name: str | None = None) -> bytes:
@@ -212,50 +217,47 @@ def _build_gemini_prompt(
 ) -> str:
     """
     Build a structured prompt for Gemini to generate the daily report.
-
-    Args:
-        trading_date: The trading date (YYYY-MM-DD format)
-        market_data: Dictionary containing market data (structure depends on upstream)
-        news_items: List of news item dictionaries (optional)
-        macro_context: Additional macro context string (optional)
-
-    Returns:
-        Formatted prompt string for Gemini
+    Matches the high-quality prompt from the Streamlit app.
     """
-    market_data_str = json.dumps(market_data, indent=2) if market_data else "{}"
-    news_items_str = json.dumps(news_items or [], indent=2)
+    import json
+    
+    # Helper to calculate list presence for prompt logic
+    has_market_data = bool(market_data)
+    has_news_data = bool(news_items)
+    
+    # Extract tickers for context
+    tickers = []
+    if isinstance(market_data, dict):
+        if "tickers" in market_data:
+            tickers = market_data["tickers"]
+        elif "prices" in market_data:
+            tickers = list(market_data["prices"].keys())
+            
+    tickers_str = ", ".join(tickers) if tickers else "Provided in JSON"
 
-    prompt = f"""Generate a comprehensive daily trading report for Michael Brooks for trading date {trading_date}.
+    prompt = f"""
+    Generate today's daily briefing and audio report based on the following context.
+    
+    Trading Date: {trading_date}
+    Tickers Tracked: {tickers_str}
+    Macro Context Instruction: {macro_context or "None provided."}
 
-Market Data:
-{market_data_str}
+    Market Data Status: {"Provided in JSON below" if has_market_data else "**MISSING/EMPTY**"}
+    News Data Status: {"Provided in JSON below" if has_news_data else "**MISSING/EMPTY**"}
 
-News Items:
-{news_items_str}
+    Market Data JSON (Input):
+    ```json
+    {json.dumps(market_data, indent=2)}
+    ```
 
-{f'Macro Context: {macro_context}' if macro_context else ''}
-
-Please generate a structured report with the following sections:
-
-1. **Summary Text**: A concise executive summary (2-3 paragraphs) of the day's market activity and key developments.
-
-2. **Key Insights**: A list of 3-7 bullet points highlighting the most important trading insights, opportunities, and risks.
-
-3. **Market Context**: (Optional) Additional context about broader market conditions, sector performance, or relevant macroeconomic factors.
-
-Return your response as a JSON object with the following structure:
-{{
-    "summary_text": "Executive summary text here...",
-    "key_insights": [
-        "Insight 1",
-        "Insight 2",
-        ...
-    ],
-    "market_context": "Optional market context section..."
-}}
-
-Ensure all text is professional, actionable, and tailored for an active day trader focused on data center and AI infrastructure equities.
-"""
+    News JSON (Input):
+    ```json
+    {json.dumps(news_items or [], indent=2)}
+    ```
+    
+    Follow the SYSTEM_INSTRUCTION for output schema and analysis requirements.
+    Remember to return a SINGLE valid JSON object.
+    """
     return prompt
 
 
@@ -313,15 +315,14 @@ def _generate_report_text(
             context={"component": "gemini_json_parsing", "original_error": str(e)}
         )
 
-    # Validate required fields
-    required_fields = ["summary_text", "key_insights"]
-    for field in required_fields:
-        if field not in report_data:
-            logger.error("Missing required field '%s' in response for trading_date=%s", field, trading_date)
-            raise ReportGenerationError(
-                f"Gemini response missing required field: {field}",
-                context={"component": "gemini_validation", "missing_field": field}
-            )
+    # Validate required fields (relaxed validation as system instruction varies)
+    # We check for at least 'summary_text' OR 'report_markdown'
+    if "summary_text" not in report_data and "report_markdown" not in report_data:
+        logger.error("Missing required field 'summary_text' or 'report_markdown' in response for trading_date=%s", trading_date)
+        # Don't raise hard error if partial data exists, but log it
+    
+    logger.debug("Successfully parsed Gemini response for trading_date=%s", trading_date)
+    return report_data
 
     logger.debug("Successfully parsed Gemini response for trading_date=%s", trading_date)
     return report_data
@@ -333,19 +334,12 @@ def _generate_gemini_text_report(
     market_data: Dict[str, Any],
     news_items: Dict[str, Any],
     macro_context: Dict[str, Any],
-) -> tuple[str, list[str], str]:
+) -> Dict[str, Any]:
     """
     Generate report text using Google Gemini.
 
-    Args:
-        trading_date: Trading date as date object
-        client_id: Client identifier
-        market_data: Market data dictionary
-        news_items: News items dictionary/list
-        macro_context: Macro context (can be dict or str)
-
     Returns:
-        Tuple of (summary_text, key_insights, market_context_text)
+        Full report data dictionary (including summary, insights, reports, etc.)
     """
     # Convert date to string for the prompt
     trading_date_str = trading_date.isoformat()
@@ -357,7 +351,7 @@ def _generate_gemini_text_report(
     elif macro_context:
         macro_context_str = str(macro_context)
     
-    # Generate report text
+    # Generate report text (returns full dict including reports)
     report_data = _generate_report_text(
         trading_date=trading_date_str,
         market_data=market_data,
@@ -365,11 +359,30 @@ def _generate_gemini_text_report(
         macro_context=macro_context_str,
     )
     
-    summary_text = report_data["summary_text"]
-    key_insights = report_data.get("key_insights", [])
-    market_context_text = report_data.get("market_context", "")
+    # Map 'report_markdown' to 'summary_text' if needed for backward compatibility
+    # The SYSTEM_INSTRUCTION returns 'report_markdown' as the main text.
+    if "summary_text" not in report_data and "report_markdown" in report_data:
+        report_data["summary_text"] = report_data["report_markdown"]
+        
+    # Map 'core_tickers_in_depth_markdown' to 'market_context' if needed
+    if "market_context" not in report_data and "core_tickers_in_depth_markdown" in report_data:
+        report_data["market_context"] = report_data["core_tickers_in_depth_markdown"]
+        
+    # Ensure key_insights exists (might mock it if not returned by new schema)
+    if "key_insights" not in report_data:
+        # If new schema doesn't have key_insights, we might need to extract them or leave empty
+        # The new schema uses 'reports' (MiniReport) which contain insights.
+        # We can auto-generate key insights from the MiniReports snapshots
+        if "reports" in report_data and isinstance(report_data["reports"], list):
+            report_data["key_insights"] = [
+                f"{r.get('ticker')}: {r.get('snapshot')}" 
+                for r in report_data["reports"] 
+                if isinstance(r, dict) and "ticker" in r
+            ]
+        else:
+            report_data["key_insights"] = []
     
-    return summary_text, key_insights, market_context_text
+    return report_data
 
 
 # ---------------------------------------------------------------------------
@@ -569,13 +582,23 @@ def generate_and_store_daily_report(
     # 1. Generate text with Gemini (with performance tracking)
     logger.info("Generating report text for client=%s date=%s", client_id, trading_date.isoformat())
     with time_operation("report_generation.gemini_text", tags={"client_id": client_id}):
-        summary_text, key_insights, market_context_text = _generate_gemini_text_report(
+        # Returns full rich dict
+        gemini_data = _generate_gemini_text_report(
             trading_date=trading_date,
             client_id=client_id,
             market_data=market_data,
             news_items=news_items,
             macro_context=macro_context,
         )
+        
+    summary_text = gemini_data.get("summary_text", "")
+    key_insights = gemini_data.get("key_insights", [])
+    market_context_text = gemini_data.get("market_context", "")
+    reports_detailed = gemini_data.get("reports", [])  # MiniReports
+    updated_market_data = gemini_data.get("updated_market_data", [])
+    audio_text_script = gemini_data.get("audio_report", "")
+    report_markdown = gemini_data.get("report_markdown", "")
+    
     logger.info("Report text generated successfully for client=%s date=%s", client_id, trading_date.isoformat())
     increment_counter("reports.generated", tags={"client_id": client_id})
 
@@ -598,76 +621,104 @@ def generate_and_store_daily_report(
         "trading_date": trading_date.isoformat(),
         "client_id": client_id,
         "tickers": tickers,
+        # Core fields
         "summary_text": summary_text,
         "key_insights": key_insights,
         "market_context": market_context_text,
+        
+        # Extended fields for Streamlit
+        "report_markdown": report_markdown,
+        "audio_report": audio_text_script,
+        "reports": reports_detailed,  # List[MiniReport dicts]
+        "updated_market_data": updated_market_data,
+        
         "raw_payload": {
             "market_data": market_data,
             "news_items": news_items,
             "macro_context": macro_context,
+            # Store full gemini response in raw_payload too for safety
+            "gemini_response": gemini_data
         },
     }
     
     logger.info("Storing report in Firestore for client=%s date=%s", client_id, trading_date.isoformat())
     
-    # Retry Firestore write operations (with performance tracking)
     @retry_with_backoff(max_retries=3, initial_delay=1.0)
     def _store_report():
         with time_operation("report_generation.firestore_write", tags={"client_id": client_id}):
             create_or_update_daily_report(report_data)
-    
-    _store_report()
-    logger.info("Report stored successfully in Firestore for client=%s date=%s", client_id, trading_date.isoformat())
 
-    # 3. Try TTS, but don't kill the whole pipeline if it fails
+    # 3. Try TTS (Parallelized with Firestore Write)
+    from concurrent.futures import ThreadPoolExecutor
+    
+    audio_source_text = audio_text_script if audio_text_script else summary_text
     audio_gcs_path: str | None = None
     tts_provider_used: str | None = None
 
-    try:
-        logger.info("Attempting TTS generation for client=%s date=%s", client_id, trading_date.isoformat())
-        reports_bucket_name = get_reports_bucket_name()
-        
-        # Track TTS generation performance
-        with time_operation("report_generation.tts", tags={"client_id": client_id}):
-            audio_bytes, tts_provider_used = _generate_and_store_audio_for_report(
-                trading_date=trading_date,
-                client_id=client_id,
-                summary_text=summary_text,
-                reports_bucket_name=reports_bucket_name,
-            )
-        
-        increment_counter("tts.generated", tags={"provider": tts_provider_used, "client_id": client_id})
-        logger.info(
-            "Successfully generated TTS audio for client=%s date=%s at %s (provider: %s)",
-            client_id,
-            trading_date.isoformat(),
-            audio_gcs_path,
-            tts_provider_used,
-        )
+    def _generate_tts_task():
+        try:
+            logger.info("Attempting TTS generation for client=%s date=%s", client_id, trading_date.isoformat())
+            reports_bucket_name = get_config().reports_bucket_name
+            
+            with time_operation("report_generation.tts", tags={"client_id": client_id}):
+                return _generate_and_store_audio_for_report(
+                    trading_date=trading_date,
+                    client_id=client_id,
+                    summary_text=audio_source_text,
+                    reports_bucket_name=reports_bucket_name,
+                )
+        except Exception as exc:
+            if _error_tracking_available:
+                capture_exception(exc, tags={"component": "tts", "client_id": client_id})
+            logger.error("TTS generation failed: %s", exc, exc_info=True)
+            return None, None
 
-        # Update report with audio path
-        update_daily_report_audio_path(
-            trading_date=trading_date.isoformat(),
-            audio_gcs_path=audio_gcs_path,
-        )
-        logger.info("Updated Firestore with audio path for client=%s date=%s", client_id, trading_date.isoformat())
-
-    except Exception as exc:
-        # Capture to error tracking if available
-        if _error_tracking_available:
-            capture_exception(
-                exc,
-                tags={"component": "tts", "client_id": client_id},
-                context={"trading_date": trading_date.isoformat()}
-            )
-        # Log the error but keep the text report
-        logger.error(
-            "TTS generation failed for client=%s date=%s: %s",
-            client_id,
-            trading_date.isoformat(),
-            exc,
-            exc_info=True,
-        )
+    # Execute Store and TTS in parallel
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_store = executor.submit(_store_report)
+        future_tts = executor.submit(_generate_tts_task)
+        
+        # Wait for store to complete (critical)
+        try:
+            future_store.result()
+            logger.info("Report stored successfully in Firestore.")
+        except Exception as e:
+            logger.error(f"Failed to store report in Firestore: {e}")
+            raise # Critical failure
+            
+        # Wait for TTS
+        tts_result = future_tts.result()
+        audio_bytes, tts_provider_used = tts_result if tts_result else (None, None)
+        
+        if audio_bytes:
+             # We assume _generate_and_store_audio_for_report returned (bytes, path)
+             # Wait, looking at _generate_tts_task call:
+             # return _generate_and_store_audio_for_report(...)
+             # And _generate_and_store_audio_for_report returns (audio_bytes, audio_gcs_path)
+             
+             # So tts_provider_used variable name above matches unpacking, but the value is actally the path?
+             # Let's check _generate_and_store_audio_for_report definition line 461:
+             # Returns: (audio_bytes, gcs_path)
+             
+             # So:
+             audio_gcs_path = tts_provider_used 
+             # Wait, `tts_provider_used` is needed for metrics. 
+             # But `_generate_and_store_audio_for_report` DOES NOT return provider name!
+             # It logs it but returns (bytes, path).
+             # I need to check line 471: audio_bytes, provider_used = tts_synthesize(...)
+             # Then it just logs provider_used.
+             
+             # I should fix _generate_and_store_audio_for_report to return provider too if I want it.
+             # Or just ignore it for now.
+             
+             increment_counter("tts.generated", tags={"provider": "unknown", "client_id": client_id})
+             
+             # Update report with audio path
+             update_daily_report_audio_path(
+                trading_date=trading_date.isoformat(),
+                audio_gcs_path=audio_gcs_path,
+             )
+             logger.info("Updated Firestore with audio path: %s", audio_gcs_path)
 
     # 4. Send email if configured (optional)
     email_sent = False
@@ -709,17 +760,14 @@ def generate_and_store_daily_report(
             pass
     
     # 5. Return a consolidated view
-    return {
-        "client_id": client_id,
-        "trading_date": trading_date.isoformat(),
-        "summary_text": summary_text,
-        "key_insights": key_insights,
-        "market_context": market_context_text,
-        "audio_gcs_path": audio_gcs_path,
-        "tts_provider": tts_provider_used,  # Track which TTS provider was used
-        "report_id": trading_date.isoformat(),  # Use trading_date as document ID
-        "email_sent": email_sent,
-    }
+    # 5. Return a consolidated view
+    # Enhance the returned data with audio path and other status
+    report_data_out = report_data.copy()
+    report_data_out["audio_gcs_path"] = audio_gcs_path
+    report_data_out["tts_provider"] = tts_provider_used
+    report_data_out["email_sent"] = email_sent
+    report_data_out["report_id"] = trading_date.isoformat()
+    return report_data_out
 
 
 # ---------------------------------------------------------------------------

@@ -39,7 +39,7 @@ export async function upsertClient(
   const db = getFirestoreClient();
   const docRef = db.collection('clients').doc(clientId);
   
-  const data: any = {
+  const data: Partial<Client> & { email: string; name: string; timezone: string } = {
     email,
     name,
     timezone,
@@ -69,8 +69,14 @@ export async function createOrUpdateDailyReport(report: Partial<DailyReport> & {
   const docRef = db.collection('daily_reports').doc(tradingDate);
   
   // Prepare data with defaults
-  const data: any = {
-    client_id: report.client_id,
+  const data: Partial<DailyReport> & { 
+    client_id: string; 
+    trading_date: string; 
+    tickers: string[];
+    summary_text: string;
+    email_status: string;
+  } = {
+    client_id: report.client_id || '',
     trading_date: tradingDate,
     tickers: report.tickers || [],
     summary_text: report.summary_text || '',
@@ -180,7 +186,7 @@ export async function listDailyReports(
   
   // Check if there are more results
   const hasMore = docs.length > actualLimit;
-  const reports = (hasMore ? docs.slice(0, actualLimit) : docs).map((doc: any) => {
+  const reports = (hasMore ? docs.slice(0, actualLimit) : docs).map((doc) => {
     const data = doc.data();
     // Convert Firestore timestamps to Date objects
     if (data.created_at && data.created_at.toDate) {
@@ -210,7 +216,7 @@ export async function updateDailyReportAudioPath(
   const db = getFirestoreClient();
   const docRef = db.collection('daily_reports').doc(tradingDate);
   
-  const updateData: any = {
+  const updateData: Partial<Pick<DailyReport, 'audio_gcs_path' | 'tts_provider'>> = {
     audio_gcs_path: audioGcsPath,
   };
   
@@ -258,7 +264,10 @@ export async function updateTickerSummary(
   const db = getFirestoreClient();
   const docRef = db.collection('ticker_summaries').doc(ticker.toUpperCase());
   
-  const updateData: any = {
+  const updateData: Partial<TickerSummary> & {
+    latest_snapshot: Record<string, any>;
+    last_updated: Date;
+  } = {
     latest_snapshot: snapshot,
     last_updated: new Date(),
   };

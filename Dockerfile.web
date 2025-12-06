@@ -1,0 +1,36 @@
+# Dockerfile.web (Production)
+# Stage 1: Build the React app
+FROM node:20-slim AS builder
+
+WORKDIR /app
+
+# Setup build-time variables (can be overridden via --build-arg)
+ARG VITE_API_URL
+ENV VITE_API_URL=${VITE_API_URL}
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+# Stage 2: Serve with Nginx
+FROM nginx:alpine
+
+# Remove default nginx static assets
+RUN rm -rf /usr/share/nginx/html/*
+
+# Copy custom nginx configuration
+# (Assumes nginx.react.conf exists and is configured for SPA)
+COPY nginx.react.conf /etc/nginx/conf.d/default.conf
+
+# Copy built artifacts
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Security: Run as non-root (Nginx alpine supports this with some tweaks, 
+# but for standard cloud run usage, root is often default. 
+# We'll stick to standard nginx execution for stability unless stringent requirements exist)
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

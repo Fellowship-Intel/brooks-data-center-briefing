@@ -24,7 +24,15 @@ from utils.input_validation import (
     validate_market_data,
     validate_watchlist_request,
 )
+from utils.input_validation import (
+    validate_client_id,
+    validate_trading_date,
+    validate_market_data,
+    validate_watchlist_request,
+)
 from utils.exceptions import ValidationError
+from app.dependencies import get_current_user
+from fastapi import Depends
 
 # Initialize error tracking (optional)
 try:
@@ -35,6 +43,10 @@ except ImportError:
     _error_tracking_available = False
     def capture_exception(*args, **kwargs): pass
 
+from app.logging_config import configure_logging
+
+# Initialize logging immediately
+configure_logging()
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -114,9 +126,13 @@ app = FastAPI(
 )
 
 # Add CORS middleware to allow frontend requests
+# Default to local dev ports if not specified
+allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8080,http://localhost:3002,http://localhost:3003")
+allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -127,35 +143,7 @@ app.add_middleware(
 # Pydantic models
 # ---------------------------------------------------------------------------
 
-class GenerateReportRequest(BaseModel):
-    """
-    Request body for generating a new report.
-
-    All fields are optional for now so you can quickly test with an empty body;
-    when missing, we fall back to simple dummy data similar to your manual harness.
-    """
-    trading_date: Optional[date] = None
-    client_id: Optional[str] = None
-    market_data: Optional[Dict[str, Any]] = None
-    news_items: Optional[Dict[str, Any]] = None
-    macro_context: Optional[Dict[str, Any]] = None
-
-
-class WatchlistReportRequest(BaseModel):
-    trading_date: Optional[date] = None
-    client_id: str
-    watchlist: List[str]
-
-
-class WatchlistReportResponse(BaseModel):
-    client_id: str
-    trading_date: date
-    watchlist: List[str]
-    summary_text: str
-    key_insights: List[str]
-    audio_gcs_path: Optional[str] = None
-    raw_payload: Dict[str, Any]
-
+from app.schemas import GenerateReportRequest, DailyReportResponse, WatchlistReportResponse, WatchlistReportRequest, MarketData, NewsItem
 
 # ---------------------------------------------------------------------------
 # Internal helpers for dummy data (mirrors manual harness)
@@ -261,7 +249,7 @@ async def health_check() -> Dict[str, Any]:
 
 
 @app.post("/reports/generate")
-async def generate_report(req: GenerateReportRequest) -> Dict[str, Any]:
+async def generate_report(req: GenerateReportRequest, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     """
     Generate a daily report.
 
@@ -279,15 +267,45 @@ async def generate_report(req: GenerateReportRequest) -> Dict[str, Any]:
     
     # Validate and sanitize inputs
     try:
-        client_id = validate_client_id(req.client_id or config.default_client_id)
-        trading_date = validate_trading_date(req.trading_date or date.today())
+        # Enforce client_id from token
+        client_id_from_auth = user.get("email")
+        if not client_id_from_auth:
+             raise HTTPException(status_code=400, detail="User email not found in token")
+             
+        client_id = validate_client_id(client_id_from_auth)
+        trading_date = validate_trading_date(req.trading_date)
         
-        if req.market_data:
-            market_data = validate_market_data(req.market_data)
+        # Transform MarketData List -> Dict
+        market_data: Dict[str, Any] = {}
+        if req.market_data_json:
+            tickers = [m.ticker for m in req.market_data_json]
+            prices = {
+                m.ticker: {"close": m.close, "change_percent": m.percent_change} 
+                for m in req.market_data_json
+            }
+            market_data = {"tickers": tickers, "prices": prices}
+            # Optional: Call validate_market_data(market_data) if specific logic needed
         else:
             market_data = _dummy_market_data()
         
-        news_items = req.news_items or _dummy_news_items()
+        # Transform NewsItem List -> Dict
+        news_items: Dict[str, Any] = {}
+        if req.news_json:
+            for item in req.news_json:
+                tk = item.ticker or "macro"
+                if tk not in news_items:
+                    news_items[tk] = []
+                news_items[tk].append({
+                    "headline": item.headline,
+                    "summary": item.summary,
+                    "source": item.source,
+                    "time": item.time
+                })
+        else:
+            news_items = _dummy_news_items()
+
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except ValidationError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     
@@ -323,15 +341,22 @@ async def generate_report(req: GenerateReportRequest) -> Dict[str, Any]:
 
 
 @app.get("/reports/{trading_date}")
-async def get_report(trading_date: str, client_id: Optional[str] = None) -> Dict[str, Any]:
+async def get_report(trading_date: str, client_id: Optional[str] = None, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     """
     Fetch a previously generated report for a given trading_date and client_id.
 
     trading_date is ISO format (YYYY-MM-DD).
     """
     from config import get_config
+    from config import get_config
+    
+    # Enforce auth
+    auth_client_id = user.get("email")
+    if client_id and client_id != auth_client_id:
+        raise HTTPException(status_code=403, detail="Cannot access reports for other clients")
+    
     if client_id is None:
-        client_id = get_config().default_client_id
+        client_id = auth_client_id
     try:
         parsed_date = date.fromisoformat(trading_date)
     except ValueError:
@@ -356,6 +381,7 @@ async def get_report(trading_date: str, client_id: Optional[str] = None) -> Dict
 async def get_report_audio(
     trading_date: str,
     client_id: Optional[str] = None,
+    user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
     Return audio information for a given report.
@@ -364,8 +390,12 @@ async def get_report_audio(
     to return a signed URL or direct audio streaming if you want a richer UX.
     """
     from config import get_config
+    auth_client_id = user.get("email")
+    if client_id and client_id != auth_client_id:
+        raise HTTPException(status_code=403, detail="Cannot access reports for other clients")
+    
     if client_id is None:
-        client_id = get_config().default_client_id
+        client_id = auth_client_id
     try:
         parsed_date = date.fromisoformat(trading_date)
     except ValueError:
@@ -395,19 +425,24 @@ async def get_report_audio(
 
 
 @app.post("/reports/generate/watchlist", response_model=WatchlistReportResponse)
-async def generate_watchlist_report_endpoint(payload: WatchlistReportRequest):
+async def generate_watchlist_report_endpoint(payload: WatchlistReportRequest, user: Dict[str, Any] = Depends(get_current_user)):
     trading_date = payload.trading_date or date.today()
+    
+    # Enforce auth
+    client_id = user.get("email")
+    if not client_id:
+         raise HTTPException(status_code=401, detail="Invalid user")
 
     logger.info(
         "API /reports/generate/watchlist: client=%s date=%s watchlist=%s",
-        payload.client_id,
+        client_id,
         trading_date.isoformat(),
         ",".join(payload.watchlist),
     )
 
     report = generate_watchlist_daily_report(
         trading_date=trading_date,
-        client_id=payload.client_id,
+        client_id=client_id,
         watchlist=payload.watchlist,
     )
 
@@ -434,14 +469,26 @@ async def generate_watchlist_report_endpoint(payload: WatchlistReportRequest):
 
 
 @app.get("/reports")
-async def list_reports(limit: int = 100, start_after: Optional[str] = None, client_id: Optional[str] = None) -> Dict[str, Any]:
+async def list_reports(
+    limit: int = 100, 
+    start_after: Optional[str] = None, 
+    client_id: Optional[str] = None,
+    user: Dict[str, Any] = Depends(get_current_user)
+) -> Dict[str, Any]:
     """
     List recent reports with pagination.
     """
     try:
         from config import get_config
+        from config import get_config
+        
+        # Enforce auth
+        auth_client_id = user.get("email")
+        if client_id and client_id != auth_client_id:
+             raise HTTPException(status_code=403, detail="Cannot access reports for other clients")
+             
         if client_id is None:
-            client_id = get_config().default_client_id
+            client_id = auth_client_id
         
         result = list_daily_reports(
             client_id=client_id,
@@ -456,7 +503,7 @@ async def list_reports(limit: int = 100, start_after: Optional[str] = None, clie
 
 
 @app.post("/chat/message")
-async def chat_message(req: Dict[str, Any]) -> Dict[str, Any]:
+async def chat_message(req: Dict[str, Any], user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     """
     Send a chat message and get AI response.
     """

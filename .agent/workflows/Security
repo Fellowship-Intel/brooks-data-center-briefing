@@ -1,0 +1,4 @@
+Act as a Security Researcher. Review the codebase for common desktop vulnerabilities:
+1. **Injection:** Check for `dangerouslySetInnerHTML` or `eval()`.
+2. **Isolation:** (If Electron) Verify `nodeIntegration` is false and `contextIsolation` is true.
+3. **Secrets:** Scan for any hardcoded API keys or tokens.

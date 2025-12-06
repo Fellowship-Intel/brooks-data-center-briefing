@@ -195,3 +195,8 @@ def time_operation(name: str, tags: Optional[Dict[str, str]] = None):
     """Convenience function for timing operations."""
     return get_metrics_collector().time_operation(name, tags)
 
+
+def record_latency(name: str, duration: float, tags: Optional[Dict[str, str]] = None) -> None:
+    """Convenience function to record latency (alias for record_timing)."""
+    get_metrics_collector().record_timing(name, duration, tags)
+

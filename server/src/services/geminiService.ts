@@ -11,7 +11,11 @@ import { logger } from '../utils/logger';
 import { env } from '../config/env';
 
 // Global chat session to maintain context
+// Note: This is a simple implementation. For production with multiple clients,
+// consider using a Map<clientId, ChatSession> or request-scoped sessions.
 let chatSession: ChatSession | null = null;
+let sessionLastUsed: number = 0;
+const SESSION_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 /**
  * Get Gemini API key from Secret Manager or environment.
@@ -144,25 +148,69 @@ export async function generateDailyReport(inputData: InputData): Promise<DailyRe
 }
 
 /**
- * Send a chat message and get a response.
- * 
- * Note: A chat session must be established first by generating a report.
- * If no session exists, this will throw an error with instructions.
+ * Clear the chat session (useful for cleanup or reset).
  */
-export async function sendChatMessage(message: string): Promise<string> {
+export function clearChatSession(): void {
+  chatSession = null;
+  sessionLastUsed = 0;
+  logger.debug('Chat session cleared');
+}
+
+/**
+ * Check if chat session exists and is still valid.
+ */
+function isSessionValid(): boolean {
   if (!chatSession) {
-    throw new Error(
-      'Chat session not initialized. Please generate a report first to establish context. ' +
-      'The chat session is created automatically when you generate a daily report via POST /reports/generate.'
-    );
+    return false;
+  }
+  
+  // Check if session has timed out
+  const now = Date.now();
+  if (sessionLastUsed > 0 && (now - sessionLastUsed) > SESSION_TIMEOUT_MS) {
+    logger.debug('Chat session expired, clearing');
+    clearChatSession();
+    return false;
+  }
+  
+  return true;
+}
+
+/**
+ * Initialize a new chat session if one doesn't exist or has expired.
+ */
+async function ensureChatSession(): Promise<ChatSession> {
+  if (isSessionValid()) {
+    sessionLastUsed = Date.now();
+    return chatSession!;
   }
 
+  // Create a new session
+  logger.debug('Initializing new chat session');
+  const model = await getGeminiModel();
+  chatSession = model.startChat({
+    history: [],
+  });
+  sessionLastUsed = Date.now();
+  return chatSession;
+}
+
+/**
+ * Send a chat message and get a response.
+ * 
+ * If no session exists, a new one will be created automatically.
+ * Sessions expire after 30 minutes of inactivity.
+ */
+export async function sendChatMessage(message: string): Promise<string> {
   try {
-    const result = await chatSession.sendMessage(message);
+    const session = await ensureChatSession();
+    const result = await session.sendMessage(message);
     const response = await result.response;
+    sessionLastUsed = Date.now();
     return response.text() || "I couldn't generate a response.";
   } catch (error) {
     logger.error('Error sending chat message:', error);
+    // Clear session on error to force recreation on next request
+    clearChatSession();
     throw error;
   }
 }

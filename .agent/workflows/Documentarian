@@ -1,0 +1,7 @@
+Read `package.json` and the main entry file.
+Generat a `README.md` section titled "Development Setup".
+Include:
+1. Prerequisites (Node version, Python version, etc.).
+2. Exact commands to install dependencies.
+3. Exact commands to start the app in "Dev Mode" vs "Production Mode".
+4. Troubleshooting for common installation issues.

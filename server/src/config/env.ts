@@ -3,6 +3,7 @@
  */
 
 import dotenv from 'dotenv';
+import { logger } from '../utils/logger';
 
 // Load environment variables
 dotenv.config();
@@ -14,8 +15,12 @@ export interface EnvConfig {
   geminiModelName: string;
   geminiApiKey?: string;
   elevenLabsApiKey?: string;
+  elevenLabsVoiceId?: string;
+  elevenLabsModelId?: string;
   environment: string;
   sentryDsn?: string;
+  reactAppUrl?: string;
+  streamlitAppUrl?: string;
 }
 
 export function getEnvConfig(): EnvConfig {
@@ -26,8 +31,12 @@ export function getEnvConfig(): EnvConfig {
     geminiModelName: process.env.GEMINI_MODEL_NAME || 'gemini-1.5-pro',
     geminiApiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY,
     elevenLabsApiKey: process.env.ELEVEN_LABS_API_KEY,
+    elevenLabsVoiceId: process.env.ELEVEN_LABS_VOICE_ID,
+    elevenLabsModelId: process.env.ELEVEN_LABS_MODEL_ID,
     environment: process.env.ENVIRONMENT || 'development',
     sentryDsn: process.env.SENTRY_DSN,
+    reactAppUrl: process.env.REACT_APP_URL,
+    streamlitAppUrl: process.env.STREAMLIT_APP_URL,
   };
 }
 
@@ -55,7 +64,7 @@ export function validateEnv(): void {
 
   // Warn about missing API keys (not critical if using Secret Manager)
   if (!config.geminiApiKey && config.environment === 'development') {
-    console.warn(
+    logger.warn(
       '⚠️  WARNING: GEMINI_API_KEY not found in environment. ' +
       'Ensure it exists in Secret Manager or set it as an environment variable.'
     );

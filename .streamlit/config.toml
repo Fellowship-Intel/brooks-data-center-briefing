@@ -12,7 +12,7 @@ font = "sans serif"
 
 [server]
 headless = true
-port = 8080
+port = 8501
 enableCORS = true
 enableXsrfProtection = false  # Disable if not needed - speeds up requests
 # Allow file uploads

@@ -48,9 +48,19 @@ const getAllowedOrigins = (): string | string[] => {
   
   // In production, allow specific origins (return as array)
   const origins: string[] = [];
-  if (process.env.REACT_APP_URL) origins.push(process.env.REACT_APP_URL);
-  if (process.env.STREAMLIT_APP_URL) origins.push(process.env.STREAMLIT_APP_URL);
-  return origins.length > 0 ? origins : '*'; // Fallback to all if none specified
+  if (env.reactAppUrl) origins.push(env.reactAppUrl);
+  if (env.streamlitAppUrl) origins.push(env.streamlitAppUrl);
+  
+  // In production, fail securely - require explicit origins
+  if (origins.length === 0) {
+    logger.warn(
+      'No CORS origins configured in production. Set REACT_APP_URL and/or STREAMLIT_APP_URL environment variables.'
+    );
+    // Return empty array to deny all origins (more secure than '*')
+    return [];
+  }
+  
+  return origins;
 };
 
 const corsOptions = {
@@ -113,7 +123,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 // Payload too large error handler
-app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+app.use((err: Error & { type?: string }, req: Request, res: Response, next: NextFunction) => {
   if (err.type === 'entity.too.large') {
     logger.warn('Payload too large', { requestId: req.id, path: req.path });
     res.status(413).json({
@@ -142,7 +152,7 @@ app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
 
 // 404 handler
 app.use((req: Request, res: Response) => {
-  res.status(404).json({
+  return res.status(404).json({
     error: 'Not found',
     path: req.path,
     requestId: req.id,
@@ -189,7 +199,7 @@ process.on('uncaughtException', (error: Error) => {
 });
 
 // Handle unhandled promise rejections
-process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
+process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
   logger.error('Unhandled rejection:', { reason, promise });
   gracefulShutdown('unhandledRejection');
 });

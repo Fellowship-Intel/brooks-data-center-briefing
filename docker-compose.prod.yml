@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: brooks-api-prod
+    environment:
+      - PORT=8000
+      - ENVIRONMENT=production
+      # Secrets should be injected via environment variables or secrets manager in real prod.
+      # For docker-compose, we assume .env file is present or vars are passed.
+      - GCP_PROJECT_ID=${GCP_PROJECT_ID}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./.secrets:/app/.secrets:ro # Mount secrets read-only
+    restart: always
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        - VITE_API_URL=/api
+    container_name: brooks-web-prod
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    restart: always
+
+# Define a network if needed, or use default bridge
+networks:
+  default:
+    driver: bridge

@@ -59,7 +59,11 @@ class AppConfig:
     
     # Server Configuration
     port: int = field(default_factory=lambda: int(os.getenv("PORT", "8080")))
-    environment: str = field(default_factory=lambda: os.getenv("ENVIRONMENT", "development"))
+    environment: str = field(default_factory=lambda: os.getenv("ENVIRONMENT", "production"))
+    
+    # UI Configuration
+    show_developer_tools: bool = field(default_factory=lambda: os.getenv("ENVIRONMENT", "production").lower() == "development")
+    enable_debug_messages: bool = field(default_factory=lambda: os.getenv("ENVIRONMENT", "production").lower() == "development")
     
     # Monitoring
     sentry_dsn: Optional[str] = field(default_factory=lambda: os.getenv("SENTRY_DSN"))
@@ -69,6 +73,11 @@ class AppConfig:
     
     # Rate Limiting
     rate_limit_per_minute: int = field(default_factory=lambda: int(os.getenv("RATE_LIMIT_PER_MINUTE", "60")))
+    
+    # Report Generation Schedule
+    report_generation_hour: int = field(default_factory=lambda: int(os.getenv("REPORT_GENERATION_HOUR", "3")))
+    report_generation_minute: int = field(default_factory=lambda: int(os.getenv("REPORT_GENERATION_MINUTE", "55")))
+    report_timezone: str = field(default_factory=lambda: os.getenv("REPORT_TIMEZONE", "America/Los_Angeles"))
     
     def __post_init__(self):
         """Load sensitive values from Secret Manager if available."""
@@ -135,6 +144,9 @@ class AppConfig:
             "environment": self.environment,
             "cache_ttl_hours": self.cache_ttl_hours,
             "rate_limit_per_minute": self.rate_limit_per_minute,
+            "report_generation_hour": self.report_generation_hour,
+            "report_generation_minute": self.report_generation_minute,
+            "report_timezone": self.report_timezone,
         }
         
         if not hide_sensitive:

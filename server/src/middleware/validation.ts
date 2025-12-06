@@ -103,9 +103,28 @@ export const validateChatMessage: ValidationChain[] = [
 ];
 
 /**
+ * Validation error from express-validator
+ */
+export interface ValidationError {
+  path?: string;
+  param?: string;
+  msg?: string;
+  message?: string;
+  value?: unknown;
+}
+
+/**
+ * Formatted validation error
+ */
+export interface FormattedValidationError {
+  field: string;
+  message: string;
+}
+
+/**
  * Validation error formatter
  */
-export function formatValidationErrors(errors: any[]): { field: string; message: string }[] {
+export function formatValidationErrors(errors: ValidationError[]): FormattedValidationError[] {
   return errors.map((error) => ({
     field: error.path || error.param || 'unknown',
     message: error.msg || error.message || 'Invalid value',

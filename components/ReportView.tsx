@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import { DailyReportResponse, MarketData, MiniReport } from '../types';
 import AudioPlayer from './AudioPlayer';
 import { Star } from 'lucide-react';
-import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { logger } from '../utils/logger';
 
 interface ReportViewProps {
@@ -25,6 +25,9 @@ const ReportView: React.FC<ReportViewProps> = ({ data, marketData }) => {
     }
   });
 
+  // Expanded tickers for detailed analysis
+  const [expandedTickers, setExpandedTickers] = useState<Set<string>>(new Set());
+
   const toggleWatchlist = (ticker: string) => {
     const newWatchlist = watchlist.includes(ticker)
         ? watchlist.filter(t => t !== ticker)
@@ -34,7 +37,33 @@ const ReportView: React.FC<ReportViewProps> = ({ data, marketData }) => {
     localStorage.setItem('brooks_watchlist', JSON.stringify(newWatchlist));
   };
 
+  const toggleExpanded = (ticker: string) => {
+    setExpandedTickers(prev => {
+      const next = new Set(prev);
+      if (next.has(ticker)) {
+        next.delete(ticker);
+      } else {
+        next.add(ticker);
+      }
+      return next;
+    });
+  };
+
   const safeMarketData = Array.isArray(marketData) ? marketData : [];
+  
+  // Helper to get market data for a ticker
+  const getMarketDataForTicker = (ticker: string): MarketData | undefined => {
+    return safeMarketData.find(m => m.ticker === ticker);
+  };
+
+  // Helper to extract detailed report section for a ticker
+  const getDetailedReportForTicker = (ticker: string): string | null => {
+    if (!data.core_tickers_in_depth_markdown) return null;
+    // Match markdown section starting with ## TICKER or ### TICKER
+    const regex = new RegExp(`(?:##|###)\\s+${ticker}[\\s\\S]*?(?=(?:##|###|$))`, 'i');
+    const match = data.core_tickers_in_depth_markdown.match(regex);
+    return match ? match[0] : null;
+  };
   const topMoversData = safeMarketData
     .sort((a, b) => Math.abs(b.percent_change) - Math.abs(a.percent_change))
     .slice(0, 5)
@@ -42,6 +71,32 @@ const ReportView: React.FC<ReportViewProps> = ({ data, marketData }) => {
         ...d,
         color: d.percent_change >= 0 ? '#10b981' : '#ef4444'
     }));
+
+  // Largest movers by volume
+  const largestVolumeMovers = [...safeMarketData]
+    .sort((a, b) => b.volume - a.volume)
+    .slice(0, 10)
+    .map(d => ({
+      ticker: d.ticker,
+      companyName: d.company_name,
+      volume: d.volume,
+      averageVolume: d.average_volume,
+      volumeRatio: d.average_volume > 0 ? (d.volume / d.average_volume) : 0,
+      percentChange: d.percent_change,
+    }));
+
+  // Largest price changes
+  const largestPriceChanges = [...safeMarketData]
+    .map(d => ({
+      ticker: d.ticker,
+      companyName: d.company_name,
+      priceChange: d.close - d.previous_close,
+      percentChange: d.percent_change,
+      close: d.close,
+      previousClose: d.previous_close,
+    }))
+    .sort((a, b) => Math.abs(b.percentChange) - Math.abs(a.percentChange))
+    .slice(0, 10);
 
   return (
     <div className="flex flex-col h-full bg-slate-950 overflow-hidden">
@@ -96,6 +151,121 @@ const ReportView: React.FC<ReportViewProps> = ({ data, marketData }) => {
         {/* TAB: TOP MOVERS (BRIEF) */}
         {activeTab === 'brief' && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            {/* Largest Movers by Volume Visualization */}
+            {largestVolumeMovers.length > 0 && (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
+                <h3 className="text-lg font-bold text-slate-300 mb-4">📊 Largest Movers by Volume</h3>
+                <div className="h-64 w-full min-w-0">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+                    <BarChart data={largestVolumeMovers} margin={{ top: 5, right: 20, left: 5, bottom: 60 }}>
+                      <XAxis 
+                        dataKey="ticker" 
+                        tick={{fill: '#94a3b8', fontSize: 11}} 
+                        axisLine={false} 
+                        tickLine={false}
+                        angle={-45}
+                        textAnchor="end"
+                        height={60}
+                      />
+                      <YAxis 
+                        tick={{fill: '#94a3b8', fontSize: 11}}
+                        axisLine={false}
+                        tickLine={false}
+                        tickFormatter={(value) => `${(value / 1000000).toFixed(1)}M`}
+                      />
+                      <Tooltip 
+                        contentStyle={{backgroundColor: '#0f172a', borderColor: '#334155', color: '#f1f5f9'}}
+                        cursor={{fill: 'rgba(255,255,255,0.05)'}}
+                        formatter={(value: any, name: string) => {
+                          if (name === 'volume' || name === 'averageVolume') {
+                            return [`${(value / 1000000).toFixed(2)}M`, name === 'volume' ? 'Volume' : 'Avg Volume'];
+                          }
+                          return [value, name];
+                        }}
+                      />
+                      <Legend 
+                        wrapperStyle={{color: '#94a3b8', fontSize: '12px'}}
+                        iconType="rect"
+                      />
+                      <Bar dataKey="volume" fill="#10b981" radius={[4, 4, 0, 0]} name="Volume" />
+                      <Bar dataKey="averageVolume" fill="#475569" radius={[4, 4, 0, 0]} name="Avg Volume" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="mt-4 grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+                  {largestVolumeMovers.slice(0, 5).map((mover) => (
+                    <div key={mover.ticker} className="bg-slate-800/50 p-2 rounded border border-slate-700">
+                      <div className="font-semibold text-emerald-400">{mover.ticker}</div>
+                      <div className="text-slate-400">Vol: {mover.volumeRatio.toFixed(2)}x avg</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Largest Price Changes Visualization */}
+            {largestPriceChanges.length > 0 && (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
+                <h3 className="text-lg font-bold text-slate-300 mb-4">💰 Largest Price Changes</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Dollar Changes */}
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-400 mb-3">By Dollar Amount</h4>
+                    <div className="space-y-2">
+                      {[...largestPriceChanges]
+                        .sort((a, b) => Math.abs(b.priceChange) - Math.abs(a.priceChange))
+                        .slice(0, 5)
+                        .map((change) => (
+                          <div 
+                            key={change.ticker} 
+                            className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700"
+                          >
+                            <div>
+                              <div className="font-semibold text-white">{change.ticker}</div>
+                              <div className="text-xs text-slate-400">{change.companyName}</div>
+                            </div>
+                            <div className="text-right">
+                              <div className={`font-bold ${change.priceChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                {change.priceChange >= 0 ? '+' : ''}${change.priceChange.toFixed(2)}
+                              </div>
+                              <div className="text-xs text-slate-500">
+                                ${change.previousClose.toFixed(2)} → ${change.close.toFixed(2)}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                  
+                  {/* Percentage Changes */}
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-400 mb-3">By Percentage</h4>
+                    <div className="space-y-2">
+                      {largestPriceChanges.slice(0, 5).map((change) => (
+                        <div 
+                          key={change.ticker} 
+                          className="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border border-slate-700"
+                        >
+                          <div>
+                            <div className="font-semibold text-white">{change.ticker}</div>
+                            <div className="text-xs text-slate-400">{change.companyName}</div>
+                          </div>
+                          <div className="text-right">
+                            <div className={`font-bold ${change.percentChange >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {change.percentChange >= 0 ? '+' : ''}{change.percentChange.toFixed(2)}%
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              ${change.previousClose.toFixed(2)} → ${change.close.toFixed(2)}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Chart Section */}
             {topMoversData.length > 0 ? (
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm">
@@ -150,6 +320,35 @@ const ReportView: React.FC<ReportViewProps> = ({ data, marketData }) => {
                       </div>
                       
                       <div className="space-y-4">
+                        {/* Market Data Card */}
+                        {(() => {
+                          const marketInfo = getMarketDataForTicker(report.ticker);
+                          return marketInfo ? (
+                            <div className="grid grid-cols-2 gap-2 p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+                              <div>
+                                <span className="text-xs text-slate-500">Price</span>
+                                <p className="text-sm font-semibold text-white">${marketInfo.close.toFixed(2)}</p>
+                              </div>
+                              <div>
+                                <span className="text-xs text-slate-500">Change</span>
+                                <p className={`text-sm font-semibold ${marketInfo.percent_change >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                  {marketInfo.percent_change >= 0 ? '+' : ''}{marketInfo.percent_change.toFixed(2)}%
+                                </p>
+                              </div>
+                              <div>
+                                <span className="text-xs text-slate-500">Volume</span>
+                                <p className="text-sm font-semibold text-slate-300">
+                                  {(marketInfo.volume / 1000000).toFixed(2)}M
+                                </p>
+                              </div>
+                              <div>
+                                <span className="text-xs text-slate-500">Market Cap</span>
+                                <p className="text-sm font-semibold text-slate-300">{marketInfo.market_cap}</p>
+                              </div>
+                            </div>
+                          ) : null;
+                        })()}
+
                         <div>
                             <h4 className="text-xs font-bold text-slate-500 uppercase mb-1">Snapshot</h4>
                             <p className="text-sm text-slate-200 leading-relaxed">{report.snapshot}</p>
@@ -164,6 +363,31 @@ const ReportView: React.FC<ReportViewProps> = ({ data, marketData }) => {
                                 <p className="text-sm text-emerald-100/90 italic leading-relaxed">{report.day_trading_lens}</p>
                             </div>
                         </div>
+
+                        {/* Expandable Detailed Analysis */}
+                        {(() => {
+                          const detailedReport = getDetailedReportForTicker(report.ticker);
+                          const isExpanded = expandedTickers.has(report.ticker);
+                          
+                          return detailedReport ? (
+                            <div>
+                              <button
+                                onClick={() => toggleExpanded(report.ticker)}
+                                className="text-xs font-bold text-emerald-500 hover:text-emerald-400 uppercase mb-2 flex items-center gap-1 transition-colors"
+                                aria-label={isExpanded ? 'Collapse detailed analysis' : 'Expand detailed analysis'}
+                                aria-expanded={isExpanded}
+                              >
+                                <span>{isExpanded ? '▼' : '▶'}</span> Detailed Analysis
+                              </button>
+                              {isExpanded && (
+                                <div className="mt-2 p-3 bg-slate-800/30 rounded-lg border border-slate-700 prose prose-invert prose-xs max-w-none">
+                                  <ReactMarkdown>{detailedReport}</ReactMarkdown>
+                                </div>
+                              )}
+                            </div>
+                          ) : null;
+                        })()}
+
                         <div>
                             <h4 className="text-xs font-bold text-slate-500 uppercase mb-2">Watch Next</h4>
                             <ul className="space-y-1">

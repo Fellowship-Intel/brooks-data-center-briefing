@@ -26,8 +26,8 @@ class ElevenLabsTTS {
   private initializationPromise: Promise<void> | null = null;
 
   constructor(apiKey?: string, voiceId?: string) {
-    this.voiceId = voiceId || process.env.ELEVEN_LABS_VOICE_ID || this.getDefaultVoice();
-    this.modelId = process.env.ELEVEN_LABS_MODEL_ID || 'eleven_multilingual_v2';
+    this.voiceId = voiceId || env.elevenLabsVoiceId || this.getDefaultVoice();
+    this.modelId = env.elevenLabsModelId || 'eleven_multilingual_v2';
     this.providedApiKey = apiKey;
   }
 

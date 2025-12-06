@@ -83,7 +83,9 @@ def render_status_indicators(show_in_sidebar: bool = True) -> None:
             
             with col2:
                 st.markdown(f"**{component.replace('_', ' ').title()}**")
-                if status_info.get("error"):
+                # Only show error details in development mode
+                from utils.user_messages import is_development_mode
+                if status_info.get("error") and is_development_mode():
                     st.caption(f"Error: {status_info['error'][:50]}...")
         
         # Refresh button

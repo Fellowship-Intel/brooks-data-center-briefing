@@ -14,17 +14,12 @@ import logging
 # Add the python_app directory to the path
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Auto-setup GCP credentials if not already set
-if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-    default_creds_path = Path(__file__).parent / ".secrets" / "app-backend-sa.json"
-    if default_creds_path.exists():
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(default_creds_path)
+# Auto-setup and initialization
+from python_app.utils.setup import init_app
+init_app()
 
-# Set default project ID if not set (use centralized config)
-from config import get_config
-_config = get_config()
-if not os.getenv("GCP_PROJECT_ID"):
-    os.environ["GCP_PROJECT_ID"] = _config.gcp_project_id
+# Get logger (configured in init_app)
+logger = logging.getLogger(__name__)
 
 # Import heavy modules (cached by Python's import system after first load)
 import pandas as pd
@@ -57,440 +52,43 @@ from utils.rate_limiter import (
 )
 from report_repository import get_daily_report
 from gcp_clients import get_firestore_client
+from python_app.utils.auth_handler import handle_auth, get_current_user
+from python_app.services.alert_service import AlertService, ConditionType
+from python_app.services.market_data_service import fetch_watchlist_intraday_data
 
-# Initialize error tracking (optional)
+# Import error tracking placeholders if needed for types, though init_app handles init
+# We define no-op capture_exception/set_user_context locally if import fails
+# to satisfy local usage in app.py if any. 
+# Checking app.py usage: it imports them from utils.error_tracking in try/except block originally.
+# We should probably keep the try/except for the symbols if they are used in app.py logic
 try:
-    from utils.error_tracking import init_error_tracking, capture_exception, set_user_context
-    init_error_tracking(environment=os.getenv("ENVIRONMENT", "development"))
+    from utils.error_tracking import capture_exception, set_user_context
     _error_tracking_available = True
 except ImportError:
     _error_tracking_available = False
     def capture_exception(*args, **kwargs): pass
     def set_user_context(*args, **kwargs): pass
 
-# Set up logging
-logger = logging.getLogger(__name__)
-if not logger.handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s:%(lineno)d - %(message)s",
-    )
-
-
-# Page configuration - optimized for desktop
-st.set_page_config(
-    page_title="Brooks Data Center Daily Briefing",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded",
-    menu_items={
-        'Get Help': None,
-        'Report a bug': None,
-        'About': "Brooks Data Center Daily Briefing - Desktop Application"
-    }
-)
 
 # Enhanced Custom CSS for dark theme with vibrant colors
-st.markdown("""
-<style>
-    /* Base styling with improved text rendering */
-    html, body, [class*="css"] {
-        font-size: 16pt !important;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 
-                     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-        text-rendering: optimizeLegibility;
-    }
-    
-    /* Main container - optimized for desktop/larger screens */
-    .main .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-        max-width: 1600px;  /* Increased from 1400px for better desktop experience */
-        padding-left: 3rem;
-        padding-right: 3rem;
-    }
-    
-    /* Desktop-specific optimizations */
-    @media (min-width: 1200px) {
-        .main .block-container {
-            max-width: 1800px;
-            padding-left: 4rem;
-            padding-right: 4rem;
-        }
-        
-        /* Wider columns for desktop */
-        .stColumns {
-            gap: 2rem !important;
-        }
-        
-        /* Larger dataframes on desktop */
-        .stDataFrame {
-            font-size: 0.95rem !important;
-        }
-        
-        /* Better spacing for desktop */
-        .element-container {
-            margin-bottom: 1.5rem !important;
-        }
-    }
-    
-    /* App background */
-    .stApp {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        color: #f1f5f9;
-    }
-    
-    /* Headers with vibrant colors and improved clarity */
-    h1, h2, h3, h4, h5, h6 {
-        color: #10b981 !important;
-        font-weight: 700 !important;
-        margin-top: 1.5rem;
-        margin-bottom: 1rem;
-        text-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
-        letter-spacing: -0.02em;
-    }
-    
-    h1 {
-        font-size: 2.5rem;
-        border-bottom: 3px solid #10b981;
-        padding-bottom: 0.5rem;
-        background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        border-image: linear-gradient(135deg, #10b981 0%, #34d399 100%) 1;
-    }
-    
-    h2 {
-        font-size: 2rem;
-        color: #34d399 !important;
-    }
-    
-    h3 {
-        font-size: 1.5rem;
-        color: #6ee7b7 !important;
-    }
-    
-    /* Text inputs with vibrant focus states */
-    .stTextInput > div > div > input {
-        background-color: #1e293b !important;
-        color: #f1f5f9 !important;
-        border: 2px solid #334155 !important;
-        border-radius: 0.5rem !important;
-        padding: 0.5rem !important;
-        font-weight: 500 !important;
-    }
-    
-    .stTextInput > div > div > input:focus {
-        border-color: #10b981 !important;
-        box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.3), 0 0 20px rgba(16, 185, 129, 0.2) !important;
-        outline: none !important;
-    }
-    
-    /* Text areas with vibrant focus states */
-    .stTextArea > div > div > textarea {
-        background-color: #1e293b !important;
-        color: #f1f5f9 !important;
-        border: 2px solid #334155 !important;
-        border-radius: 0.5rem !important;
-        font-weight: 500 !important;
-    }
-    
-    .stTextArea > div > div > textarea:focus {
-        border-color: #10b981 !important;
-        box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.3), 0 0 20px rgba(16, 185, 129, 0.2) !important;
-        outline: none !important;
-    }
-    
-    /* Select boxes */
-    .stSelectbox > div > div > select {
-        background-color: #1e293b !important;
-        color: #f1f5f9 !important;
-        border: 1px solid #334155 !important;
-        border-radius: 0.5rem !important;
-    }
-    
-    /* Buttons with vibrant colors and glow effects */
-    .stButton > button {
-        background: linear-gradient(135deg, #10b981 0%, #34d399 100%) !important;
-        color: #0f172a !important;
-        border: none !important;
-        border-radius: 0.5rem !important;
-        padding: 0.5rem 1.5rem !important;
-        font-weight: 700 !important;
-        transition: all 0.3s ease !important;
-        box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4) !important;
-        text-shadow: none !important;
-    }
-    
-    .stButton > button:hover {
-        background: linear-gradient(135deg, #059669 0%, #10b981 100%) !important;
-        transform: translateY(-2px) !important;
-        box-shadow: 0 6px 20px rgba(16, 185, 129, 0.6) !important;
-    }
-    
-    /* Date input */
-    .stDateInput > div > div > input {
-        background-color: #1e293b !important;
-        color: #f1f5f9 !important;
-        border: 1px solid #334155 !important;
-        border-radius: 0.5rem !important;
-    }
-    
-    /* Sidebar */
-    .css-1d391kg {
-        background-color: #1e293b !important;
-    }
-    
-    /* Logo styling - clean and prominent */
-    .stSidebar img {
-        max-width: 100% !important;
-        height: auto !important;
-        margin: 0 auto !important;
-        display: block !important;
-        border-radius: 0.75rem !important;
-        filter: drop-shadow(0 4px 12px rgba(16, 185, 129, 0.3));
-        transition: all 0.3s ease !important;
-    }
-    
-    .stSidebar img:hover {
-        filter: drop-shadow(0 6px 20px rgba(16, 185, 129, 0.5));
-        transform: scale(1.02);
-    }
-    
-    .stSidebar [data-testid="stImage"] {
-        padding: 0 !important;
-        margin: 0 auto !important;
-        background: transparent !important;
-    }
-    
-    /* Logo container styling - clean transparent background */
-    .stSidebar [data-testid="stMarkdownContainer"]:has(img) {
-        background-color: transparent !important;
-        padding: 0.5rem 0 !important;
-    }
-    
-    /* Metrics with vibrant colors */
-    [data-testid="stMetricValue"] {
-        background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        font-size: 2rem !important;
-        font-weight: 800 !important;
-        text-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
-    }
-    
-    [data-testid="stMetricLabel"] {
-        color: #cbd5e1 !important;
-        font-weight: 600 !important;
-    }
-    
-    /* Dataframes - enhanced for desktop */
-    .stDataFrame {
-        background-color: #1e293b !important;
-        border-radius: 0.5rem !important;
-        overflow-x: auto !important;
-    }
-    
-    /* Better table display on desktop */
-    @media (min-width: 1200px) {
-        .stDataFrame table {
-            width: 100% !important;
-        }
-        
-        .stDataFrame th,
-        .stDataFrame td {
-            padding: 0.75rem 1rem !important;
-        }
-    }
-    
-    /* Tabs with vibrant colors - enhanced for desktop */
-    .stTabs [data-baseweb="tab-list"] {
-        background-color: #1e293b !important;
-        border-radius: 0.5rem !important;
-        padding: 0.25rem !important;
-        margin-bottom: 1.5rem !important;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        color: #94a3b8 !important;
-        font-weight: 600 !important;
-        transition: all 0.3s ease !important;
-        padding: 0.75rem 1.5rem !important;
-        font-size: 1rem !important;
-    }
-    
-    .stTabs [data-baseweb="tab"]:hover {
-        color: #cbd5e1 !important;
-        background-color: rgba(51, 65, 85, 0.3) !important;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(52, 211, 153, 0.1) 100%) !important;
-        color: #34d399 !important;
-        border-bottom: 3px solid #10b981 !important;
-        font-weight: 700 !important;
-        text-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
-    }
-    
-    /* Desktop tab enhancements */
-    @media (min-width: 1200px) {
-        .stTabs [data-baseweb="tab"] {
-            padding: 1rem 2rem !important;
-            font-size: 1.1rem !important;
-        }
-    }
-    
-    /* Expander */
-    .streamlit-expanderHeader {
-        background-color: #1e293b !important;
-        color: #f1f5f9 !important;
-        border-radius: 0.5rem !important;
-    }
-    
-    /* Code blocks */
-    code {
-        background-color: #1e293b !important;
-        color: #10b981 !important;
-        padding: 0.2rem 0.4rem !important;
-        border-radius: 0.25rem !important;
-    }
-    
-    pre {
-        background-color: #1e293b !important;
-        border: 1px solid #334155 !important;
-        border-radius: 0.5rem !important;
-        padding: 1rem !important;
-    }
-    
-    /* Markdown with improved readability */
-    .stMarkdown {
-        color: #f1f5f9 !important;
-        line-height: 1.7 !important;
-        font-weight: 400 !important;
-    }
-    
-    .stMarkdown strong {
-        color: #34d399 !important;
-        font-weight: 700 !important;
-        text-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
-    }
-    
-    .stMarkdown p {
-        color: #e2e8f0 !important;
-        margin-bottom: 1rem !important;
-    }
-    
-    .stMarkdown li {
-        color: #e2e8f0 !important;
-        margin-bottom: 0.5rem !important;
-    }
-    
-    /* Success/Info/Error boxes with vibrant colors */
-    .stSuccess {
-        background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(52, 211, 153, 0.1) 100%) !important;
-        border-left: 4px solid #10b981 !important;
-        border-radius: 0.5rem !important;
-        box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2) !important;
-        color: #d1fae5 !important;
-    }
-    
-    .stInfo {
-        background: linear-gradient(135deg, rgba(59, 130, 246, 0.15) 0%, rgba(96, 165, 250, 0.1) 100%) !important;
-        border-left: 4px solid #3b82f6 !important;
-        border-radius: 0.5rem !important;
-        box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2) !important;
-        color: #dbeafe !important;
-    }
-    
-    .stError {
-        background: linear-gradient(135deg, rgba(239, 68, 68, 0.15) 0%, rgba(248, 113, 113, 0.1) 100%) !important;
-        border-left: 4px solid #ef4444 !important;
-        border-radius: 0.5rem !important;
-        box-shadow: 0 2px 8px rgba(239, 68, 68, 0.2) !important;
-        color: #fee2e2 !important;
-    }
-    
-    /* Spinner */
-    .stSpinner > div {
-        border-color: #10b981 !important;
-    }
-    
-    /* Custom scrollbar */
-    ::-webkit-scrollbar {
-        width: 10px;
-        height: 10px;
-    }
-    
-    ::-webkit-scrollbar-track {
-        background: #0f172a;
-    }
-    
-    ::-webkit-scrollbar-thumb {
-        background: #334155;
-        border-radius: 5px;
-    }
-    
-    ::-webkit-scrollbar-thumb:hover {
-        background: #475569;
-    }
-    
-    /* Cards/Containers */
-    .element-container {
-        background-color: rgba(30, 41, 59, 0.5) !important;
-        border-radius: 0.75rem !important;
-        padding: 1rem !important;
-        margin-bottom: 1rem !important;
-        border: 1px solid rgba(51, 65, 85, 0.5) !important;
-    }
-    
-    /* Links with vibrant colors */
-    a {
-        color: #34d399 !important;
-        text-decoration: none !important;
-        font-weight: 600 !important;
-        transition: all 0.2s ease !important;
-    }
-    
-    a:hover {
-        color: #10b981 !important;
-        text-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
-        text-decoration: underline !important;
-    }
-    
-    /* Chat messages styling */
-    .stChatMessage {
-        padding: 1rem !important;
-        border-radius: 0.75rem !important;
-    }
-    
-    /* Caption text */
-    .stCaption {
-        color: #94a3b8 !important;
-        font-weight: 500 !important;
-    }
-    
-    /* Sidebar text */
-    .stSidebar .stMarkdown {
-        color: #e2e8f0 !important;
-    }
-    
-    /* General text improvements */
-    p, span, div {
-        color: #e2e8f0 !important;
-    }
-</style>
-""", unsafe_allow_html=True)
+def load_css(file_name):
+    with open(file_name) as f:
+        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+
+try:
+    load_css('static/style_enhanced.css')
+except FileNotFoundError:
+    logger.warning("static/style_enhanced.css not found. Falling back to default styles.")
 
 
-def init_session_state() -> None:
+def init_session_state(client_id: str = DEFAULT_CLIENT_ID) -> None:
     """Initialize Streamlit session state with default values."""
+    if "client_id" not in st.session_state:
+        st.session_state.client_id = client_id
+    
     if "watchlist" not in st.session_state:
         # Try to load from Firestore, fall back to default
-        st.session_state.watchlist = _load_watchlist_from_firestore()
+        st.session_state.watchlist = _load_watchlist_from_firestore(client_id)
     if 'mode' not in st.session_state:
         st.session_state.mode = AppMode.INPUT
     if 'report_data' not in st.session_state:
@@ -503,6 +101,219 @@ def init_session_state() -> None:
         st.session_state.is_initializing = True
     if 'chat_input' not in st.session_state:
         st.session_state.chat_input = ''
+    if 'auto_report_loaded' not in st.session_state:
+        st.session_state.auto_report_loaded = False
+    if 'active_report_date' not in st.session_state:
+        st.session_state.active_report_date = None
+
+
+def load_active_report_automatically() -> None:
+    """
+    Automatically load the active report based on the report generation schedule.
+    
+    - If current time is before 3:55am, loads yesterday's report
+    - If current time is after 3:55am, loads today's report
+    - If today's report doesn't exist after 3:55am, automatically generates it
+    """
+    # Only load once per session
+    if st.session_state.get('auto_report_loaded', False):
+        return
+    
+    # Only load if we don't already have report data
+    if st.session_state.get('report_data') is not None:
+        st.session_state.auto_report_loaded = True
+        return
+    
+    try:
+        from utils.report_date_utils import get_active_report_date, is_after_report_cutoff_time
+        from config import get_config
+        
+        # Note: DailyReportResponse, MiniReport, MarketData are already imported at module level
+        # (line 31-33), so we can use them directly without re-importing
+        
+        config = get_config()
+        
+        # Determine which report date should be active
+        active_date = get_active_report_date(
+            hour=config.report_generation_hour,
+            minute=config.report_generation_minute,
+            timezone_name=config.report_timezone
+        )
+        
+        st.session_state.active_report_date = active_date
+        report_date_str = active_date.isoformat()
+        
+        logger.info(f"Auto-loading report for date: {report_date_str}")
+        
+        # Try to fetch report from Firestore
+        report = get_daily_report(report_date_str)
+        
+        if report:
+            # Mark as loaded
+            st.session_state.auto_report_loaded = True
+            
+            # Convert Firestore report to DailyReportResponse format
+            # (imports are now at the top of the function)
+            
+            # Check if we have raw_payload (preferred - contains full DailyReportResponse)
+            if report.get('raw_payload'):
+                raw_payload = report['raw_payload']
+                
+                # Convert reports list
+                reports = []
+                if 'reports' in raw_payload:
+                    reports = [MiniReport(**r) for r in raw_payload['reports']]
+                
+                # Convert updated_market_data if available
+                updated_market_data = None
+                if 'updated_market_data' in raw_payload and raw_payload['updated_market_data']:
+                    updated_market_data = [MarketData(**m) for m in raw_payload['updated_market_data']]
+                
+                report_response = DailyReportResponse(
+                    report_markdown=raw_payload.get('report_markdown', ''),
+                    core_tickers_in_depth_markdown=raw_payload.get('core_tickers_in_depth_markdown', ''),
+                    reports=reports,
+                    audio_report=raw_payload.get('audio_report', ''),
+                    updated_market_data=updated_market_data
+                )
+                
+                st.session_state.report_data = report_response
+                
+                # Set market data if available
+                if updated_market_data:
+                    st.session_state.market_data_input = [
+                        {
+                            'ticker': m.ticker,
+                            'company_name': m.company_name,
+                            'previous_close': m.previous_close,
+                            'open': m.open,
+                            'high': m.high,
+                            'low': m.low,
+                            'close': m.close,
+                            'volume': m.volume,
+                            'average_volume': m.average_volume,
+                            'percent_change': m.percent_change,
+                            'intraday_range': m.intraday_range,
+                            'market_cap': m.market_cap
+                        }
+                        for m in updated_market_data
+                    ]
+                
+                # Set mode to REPORT so it displays automatically
+                st.session_state.mode = AppMode.REPORT
+                
+                logger.info(f"Successfully loaded report for {report_date_str} from Firestore")
+            else:
+                # Fallback: construct from individual fields if raw_payload doesn't exist
+                reports = []
+                tickers = report.get('tickers', [])
+                insights = report.get('key_insights', [])
+                
+                for idx, insight in enumerate(insights):
+                    ticker = tickers[idx] if idx < len(tickers) else 'N/A'
+                    reports.append(MiniReport(
+                        ticker=ticker,
+                        company_name='',
+                        section_title='',
+                        snapshot=insight,
+                        catalyst_and_context='',
+                        day_trading_lens='',
+                        watch_next_bullets=[]
+                    ))
+                
+                report_response = DailyReportResponse(
+                    report_markdown=report.get('summary_text', ''),
+                    core_tickers_in_depth_markdown=report.get('market_context', ''),
+                    reports=reports,
+                    audio_report='',
+                    updated_market_data=None
+                )
+                
+                st.session_state.report_data = report_response
+                st.session_state.mode = AppMode.REPORT
+                logger.info(f"Loaded report for {report_date_str} from Firestore (constructed from fields)")
+        else:
+            # Report doesn't exist
+            # If it's after cutoff time, auto-generate the report
+            if is_after_report_cutoff_time(
+                hour=config.report_generation_hour,
+                minute=config.report_generation_minute,
+                timezone_name=config.report_timezone
+            ):
+                logger.info(f"Report for {report_date_str} not found. Auto-generating...")
+                
+                # Show progress indicator
+                with st.spinner("Auto-generating today's report..."):
+                    try:
+                        # Generate report using watchlist
+                        report = generate_watchlist_daily_report(
+                            trading_date=active_date,
+                            client_id=st.session_state.get('client_id', DEFAULT_CLIENT_ID),
+                            watchlist=st.session_state.watchlist,
+                        )
+                        
+                        # Reload the report we just generated
+                        generated_report = get_daily_report(report_date_str)
+                        if generated_report and generated_report.get('raw_payload'):
+                            raw_payload = generated_report['raw_payload']
+                            
+                            reports = []
+                            if 'reports' in raw_payload:
+                                reports = [MiniReport(**r) for r in raw_payload['reports']]
+                            
+                            updated_market_data = None
+                            if 'updated_market_data' in raw_payload and raw_payload['updated_market_data']:
+                                updated_market_data = [MarketData(**m) for m in raw_payload['updated_market_data']]
+                            
+                            report_response = DailyReportResponse(
+                                report_markdown=raw_payload.get('report_markdown', ''),
+                                core_tickers_in_depth_markdown=raw_payload.get('core_tickers_in_depth_markdown', ''),
+                                reports=reports,
+                                audio_report=raw_payload.get('audio_report', ''),
+                                updated_market_data=updated_market_data
+                            )
+                            
+                            st.session_state.report_data = report_response
+                            
+                            if updated_market_data:
+                                st.session_state.market_data_input = [
+                                    {
+                                        'ticker': m.ticker,
+                                        'company_name': m.company_name,
+                                        'previous_close': m.previous_close,
+                                        'open': m.open,
+                                        'high': m.high,
+                                        'low': m.low,
+                                        'close': m.close,
+                                        'volume': m.volume,
+                                        'average_volume': m.average_volume,
+                                        'percent_change': m.percent_change,
+                                        'intraday_range': m.intraday_range,
+                                        'market_cap': m.market_cap
+                                    }
+                                    for m in updated_market_data
+                                ]
+                            
+                            st.session_state.mode = AppMode.REPORT
+                            st.session_state.auto_report_loaded = True
+                            
+                            logger.info(f"Successfully auto-generated and loaded report for {report_date_str}")
+                            st.success("✅ Today's report has been automatically generated!")
+                    except Exception as e:
+                        logger.error(f"Failed to auto-generate report: {e}", exc_info=True)
+                        # Don't set auto_report_loaded on error so it can retry
+                        from utils.user_messages import get_user_friendly_error
+                        friendly_message = get_user_friendly_error(e, context={"error_type": "report"})
+                        st.warning(friendly_message)
+            else:
+                # Before cutoff time and no report - this is expected, just mark as attempted
+                logger.info(f"No report found for {report_date_str} (before cutoff time - expected)")
+                st.session_state.auto_report_loaded = True
+                
+    except Exception as e:
+        logger.warning(f"Failed to auto-load report: {str(e)}", exc_info=True)
+        # Don't set auto_report_loaded on error so it can retry on next load
+        # Continue without breaking the app - don't show error to user for auto-load failures
 
 
 @st.cache_data(ttl=3600)  # Cache for 1 hour - speeds up repeated loads
@@ -628,7 +439,8 @@ def render_input_form() -> None:
                         check_rate_limit(_report_generation_limiter, f"streamlit_report_{DEFAULT_CLIENT_ID}")
                     except RuntimeError as e:
                         tracker.error(f"Rate limit exceeded: {str(e)}")
-                        st.error(f"Rate limit exceeded: {str(e)}. Please wait a moment and try again.")
+                        from utils.user_messages import get_user_friendly_message
+                        st.error(get_user_friendly_message("rate_limit_exceeded"))
                         return
                     
                     # Step 1: Initialize AI
@@ -701,8 +513,16 @@ Watch Next: {', '.join(report.watch_next_bullets) if report.watch_next_bullets e
                     st.session_state.mode = AppMode.REPORT
                     st.rerun()
                     
+                except Exception as e:
+                    tracker.error(f"Error generating report: {str(e)}")
+                    from utils.user_messages import get_user_friendly_error
+                    st.error(get_user_friendly_error(e, context={"error_type": "report"}))
+                    logger.exception("Error in report generation")
+                    
             except Exception as e:
-                st.error(f"Error: {str(e)}")
+                from utils.user_messages import get_user_friendly_error
+                st.error(get_user_friendly_error(e))
+                logger.exception("Error in form submission")
 
 
 def render_audio_player(audio_text: str, audio_gcs_path: Optional[str] = None) -> None:
@@ -743,11 +563,13 @@ def render_audio_player(audio_text: str, audio_gcs_path: Optional[str] = None) -
                 audio_bytes = get_audio_bytes_from_gcs(audio_gcs_path)
                 st.audio(audio_bytes, format="audio/wav")
             except Exception as e:
-                st.error(f"Unable to load audio: {str(e)}")
+                from utils.user_messages import get_user_friendly_message
+                st.error(get_user_friendly_message("audio_generation_failed"))
                 _render_audio_text_fallback(audio_text, audio_gcs_path)
         except Exception as e:
             logger.error("Error rendering audio player: %s", str(e), exc_info=True)
-            st.error(f"Error loading audio: {str(e)}")
+            from utils.user_messages import get_user_friendly_message
+            st.error(get_user_friendly_message("audio_generation_failed"))
             _render_audio_text_fallback(audio_text, audio_gcs_path)
     elif audio_text:
         # No audio file, just show text
@@ -960,7 +782,8 @@ def render_watchlist() -> None:
                 if _save_watchlist_to_firestore():
                     st.success("Watchlist saved!")
                 else:
-                    st.error("Failed to save watchlist")
+                    from utils.user_messages import get_user_friendly_message
+                    st.error(get_user_friendly_message("watchlist_save_failed"))
         
         with watchlist_tab2:
             # Enhanced features
@@ -1017,12 +840,12 @@ def _save_watchlist_to_firestore() -> bool:
         return False
 
 
-def _load_watchlist_from_firestore() -> list[str]:
+def _load_watchlist_from_firestore(client_id: str = DEFAULT_CLIENT_ID) -> list[str]:
     """Load watchlist from Firestore if available."""
     try:
         from report_repository import get_client
         
-        client = get_client(DEFAULT_CLIENT_ID)
+        client = get_client(client_id)
         if client and "watchlist" in client:
             return client["watchlist"]
     except Exception:
@@ -1065,7 +888,8 @@ def render_chat_interface() -> None:
                     with open("output.txt", "a", encoding="utf-8") as f:
                         f.write(result_text)
             except Exception as e:
-                error_msg = f"Error: {str(e)}"
+                from utils.user_messages import get_user_friendly_error
+                error_msg = get_user_friendly_error(e)
                 st.error(error_msg)
                 st.session_state.chat_messages.append(
                     ChatMessage(role='model', text=error_msg)
@@ -1118,7 +942,8 @@ def render_chat_ui() -> None:
                     with open("output.txt", "a", encoding="utf-8") as f:
                         f.write(result_text)
             except Exception as e:
-                error_msg = f"Error: {str(e)}"
+                from utils.user_messages import get_user_friendly_error
+                error_msg = get_user_friendly_error(e)
                 st.error(error_msg)
                 # Add error message to chat history
                 st.session_state.chat_messages.append(
@@ -1211,7 +1036,8 @@ def render_dashboard_tab() -> None:
                     check_rate_limit(_report_generation_limiter, f"streamlit_watchlist_{DEFAULT_CLIENT_ID}")
                 except RuntimeError as e:
                     tracker.error(f"Rate limit exceeded: {str(e)}")
-                    st.error(f"Rate limit exceeded: {str(e)}. Please wait a moment and try again.")
+                    from utils.user_messages import get_user_friendly_message
+                    st.error(get_user_friendly_message("rate_limit_exceeded"))
                     return
                 
                 # Step 1: Market data (happens inside generate_watchlist_daily_report)
@@ -1264,7 +1090,8 @@ def render_dashboard_tab() -> None:
                 except Exception:
                     pass  # Notification failure shouldn't break error display
                 
-                st.error(f"Error generating report: {str(e)}")
+                from utils.user_messages import get_user_friendly_error
+                st.error(get_user_friendly_error(e, context={"error_type": "report"}))
                 logger.error("Report generation error: %s", str(e), exc_info=True)
     
     st.markdown("---")
@@ -1342,7 +1169,8 @@ def render_watchlist_report_tab() -> None:
                 try:
                     check_rate_limit(_report_generation_limiter, f"streamlit_watchlist_{DEFAULT_CLIENT_ID}")
                 except RuntimeError as e:
-                    st.error(f"Rate limit exceeded: {str(e)}. Please wait a moment and try again.")
+                    from utils.user_messages import get_user_friendly_message
+                    st.error(get_user_friendly_message("rate_limit_exceeded"))
                     return
                 
                 report = generate_watchlist_daily_report(
@@ -1388,7 +1216,8 @@ def render_watchlist_report_tab() -> None:
                         st.info("PDF export requires: pip install reportlab")
                     except Exception as e:
                         logger.error("PDF export failed: %s", str(e), exc_info=True)
-                        st.error(f"PDF export failed: {str(e)}")
+                        from utils.user_messages import get_user_friendly_message
+                        st.error(get_user_friendly_message("export_failed"))
                 
                 with col2:
                     try:
@@ -1403,7 +1232,8 @@ def render_watchlist_report_tab() -> None:
                         )
                     except Exception as e:
                         logger.error("CSV export failed: %s", str(e), exc_info=True)
-                        st.error(f"CSV export failed: {str(e)}")
+                        from utils.user_messages import get_user_friendly_message
+                        st.error(get_user_friendly_message("export_failed"))
                 
                 with col3:
                     # Export market data if available
@@ -1431,7 +1261,8 @@ def render_watchlist_report_tab() -> None:
                 
                 st.success("Report generated successfully!")
             except Exception as e:
-                st.error(f"Error generating report: {str(e)}")
+                from utils.user_messages import get_user_friendly_error
+                st.error(get_user_friendly_error(e, context={"error_type": "report"}))
     else:
         st.info("Click the button above to generate a report for your watchlist.")
 
@@ -1455,149 +1286,152 @@ def render_report_history_tab() -> None:
                 limit = st.number_input("Number of reports to show", min_value=10, max_value=100, value=50, step=10)
             with col2:
                 show_all = st.checkbox("Show all clients", value=False)
-        
-        # Fetch reports with pagination (client-scoped)
-        current_client_id = st.session_state.get('client_id', DEFAULT_CLIENT_ID)
-        client_id = None if show_all else current_client_id
-        
-        # Pagination state
-        if 'report_history_page' not in st.session_state:
-            st.session_state.report_history_page = None
-        
-        result = list_daily_reports(
-            client_id=client_id,
-            limit=limit,
-            order_by="trading_date",
-            descending=True,
-            start_after=st.session_state.report_history_page
-        )
-        
-        reports = result.get("reports", [])
-        has_more = result.get("has_more", False)
-        error = result.get("error")
-        
-        if error:
-            st.error(f"Error loading reports: {error}")
-            return
-        
-        if not reports:
-            st.info("No reports found. Generate a report to see it here.")
-            return
-        
-        # Apply search and filter UI
-        try:
-            from python_app.components.search_filter import render_search_filter_ui
-            filtered_reports = render_search_filter_ui(reports)
-        except Exception as e:
-            logger.warning("Search/filter UI failed: %s", str(e))
-            filtered_reports = reports
-        
-        st.success(f"Found {len(filtered_reports)} of {len(reports)} report(s)")
-        
-        # Pagination controls
-        if has_more or st.session_state.report_history_page:
-            col1, col2, col3 = st.columns([1, 1, 2])
-            with col1:
-                if st.button("◀ Previous", disabled=st.session_state.report_history_page is None):
-                    # Reset to beginning
-                    st.session_state.report_history_page = None
-                    st.rerun()
-            with col2:
-                if has_more and st.button("Next ▶"):
-                    # Move to next page
-                    st.session_state.report_history_page = result.get('last_date')
-                    st.rerun()
-            with col3:
-                if st.session_state.report_history_page:
-                    st.caption(f"Showing reports after {st.session_state.report_history_page}")
-        
-        # Display filtered reports in a scrollable list
-        for report in filtered_reports:
-            with st.expander(
-                f"📅 {report.get('trading_date', 'Unknown Date')} - {len(report.get('tickers', []))} tickers",
-                expanded=False
-            ):
-                # Report metadata
-                col1, col2, col3 = st.columns(3)
+            
+            # Fetch reports with pagination (client-scoped)
+            current_client_id = st.session_state.get('client_id', DEFAULT_CLIENT_ID)
+            client_id = None if show_all else current_client_id
+            
+            # Pagination state
+            if 'report_history_page' not in st.session_state:
+                st.session_state.report_history_page = None
+            
+            result = list_daily_reports(
+                client_id=client_id,
+                limit=limit,
+                order_by="trading_date",
+                descending=True,
+                start_after=st.session_state.report_history_page
+            )
+            
+            reports = result.get("reports", [])
+            has_more = result.get("has_more", False)
+            error = result.get("error")
+            
+            if error:
+                from utils.user_messages import get_user_friendly_message
+                st.error(get_user_friendly_message("report_not_found"))
+                return
+            
+            if not reports:
+                st.info("No reports found. Generate a report to see it here.")
+                return
+            
+            # Apply search and filter UI
+            try:
+                from python_app.components.search_filter import render_search_filter_ui
+                filtered_reports = render_search_filter_ui(reports)
+            except Exception as e:
+                logger.warning("Search/filter UI failed: %s", str(e))
+                filtered_reports = reports
+            
+            st.success(f"Found {len(filtered_reports)} of {len(reports)} report(s)")
+            
+            # Pagination controls
+            if has_more or st.session_state.report_history_page:
+                col1, col2, col3 = st.columns([1, 1, 2])
                 with col1:
-                    st.metric("Trading Date", report.get('trading_date', 'N/A'))
+                    if st.button("◀ Previous", disabled=st.session_state.report_history_page is None):
+                        # Reset to beginning
+                        st.session_state.report_history_page = None
+                        st.rerun()
                 with col2:
-                    tickers = report.get('tickers', [])
-                    st.metric("Tickers", len(tickers))
+                    if has_more and st.button("Next ▶"):
+                        # Move to next page
+                        st.session_state.report_history_page = result.get('last_date')
+                        st.rerun()
                 with col3:
-                    has_audio = "✅" if report.get('audio_gcs_path') else "❌"
-                    st.metric("Audio", has_audio)
-                
-                # Tickers list
-                if tickers:
-                    st.caption(f"Tickers: {', '.join(tickers)}")
-                
-                # Summary preview
-                summary = report.get('summary_text', '')
-                if summary:
-                    st.subheader("Summary")
-                    # Show first 500 chars with option to expand
-                    if len(summary) > 500:
-                        st.write(summary[:500] + "...")
-                        with st.expander("View full summary"):
+                    if st.session_state.report_history_page:
+                        st.caption(f"Showing reports after {st.session_state.report_history_page}")
+            
+            # Display filtered reports in a scrollable list
+            for report in filtered_reports:
+                with st.expander(
+                    f"📅 {report.get('trading_date', 'Unknown Date')} - {len(report.get('tickers', []))} tickers",
+                    expanded=False
+                ):
+                    # Report metadata
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Trading Date", report.get('trading_date', 'N/A'))
+                    with col2:
+                        tickers = report.get('tickers', [])
+                        st.metric("Tickers", len(tickers))
+                    with col3:
+                        has_audio = "✅" if report.get('audio_gcs_path') else "❌"
+                        st.metric("Audio", has_audio)
+                    
+                    # Tickers list
+                    if tickers:
+                        st.caption(f"Tickers: {', '.join(tickers)}")
+                    
+                    # Summary preview
+                    summary = report.get('summary_text', '')
+                    if summary:
+                        st.subheader("Summary")
+                        # Show first 500 chars with option to expand
+                        if len(summary) > 500:
+                            st.write(summary[:500] + "...")
+                            with st.expander("View full summary"):
+                                st.write(summary)
+                        else:
                             st.write(summary)
-                    else:
-                        st.write(summary)
-                
-                # Key insights
-                insights = report.get('key_insights', [])
-                if insights:
-                    st.subheader("Key Insights")
-                    for insight in insights:
-                        st.markdown(f"- {insight}")
-                
-                # Actions
-                st.divider()
-                action_col1, action_col2, action_col3 = st.columns(3)
-                
-                with action_col1:
-                    col_view, col_bookmark = st.columns([2, 1])
-                    with col_view:
-                        if st.button("📄 View Full Report", key=f"view_{report.get('trading_date')}"):
-                            st.session_state['selected_report_date'] = report.get('trading_date')
-                            st.rerun()
-                    with col_bookmark:
-                        # Bookmark button
+                    
+                    # Key insights
+                    insights = report.get('key_insights', [])
+                    if insights:
+                        st.subheader("Key Insights")
+                        for insight in insights:
+                            st.markdown(f"- {insight}")
+                    
+                    # Actions
+                    st.divider()
+                    action_col1, action_col2, action_col3 = st.columns(3)
+                    
+                    with action_col1:
+                        col_view, col_bookmark = st.columns([2, 1])
+                        with col_view:
+                            if st.button("📄 View Full Report", key=f"view_{report.get('trading_date')}"):
+                                st.session_state['selected_report_date'] = report.get('trading_date')
+                                st.rerun()
+                        with col_bookmark:
+                            # Bookmark button
+                            try:
+                                from python_app.components.report_viewer import render_bookmark_button
+                                render_bookmark_button(report.get('trading_date'), DEFAULT_CLIENT_ID)
+                            except Exception:
+                                pass  # Bookmarking is optional
+                    
+                    with action_col2:
+                        # Export buttons
                         try:
-                            from python_app.components.report_viewer import render_bookmark_button
-                            render_bookmark_button(report.get('trading_date'), DEFAULT_CLIENT_ID)
-                        except Exception:
-                            pass  # Bookmarking is optional
-                
-                with action_col2:
-                    # Export buttons
-                    try:
-                        from utils.export_utils import export_report_to_csv
-                        csv_bytes = export_report_to_csv(report)
-                        st.download_button(
-                            label="📊 Export CSV",
-                            data=csv_bytes,
-                            file_name=f"report_{report.get('trading_date', 'unknown')}.csv",
-                            mime="text/csv",
-                            key=f"csv_{report.get('trading_date')}"
-                        )
-                    except Exception as e:
-                        logger.error("CSV export failed: %s", str(e))
-                
-                with action_col3:
-                    # Audio player if available
-                    audio_gcs_path = report.get('audio_gcs_path')
-                    if audio_gcs_path:
-                        if st.button("🔊 Play Audio", key=f"audio_{report.get('trading_date')}"):
-                            render_audio_player("", audio_gcs_path)
-                    else:
-                        st.info("No audio available")
+                            from utils.export_utils import export_report_to_csv
+                            csv_bytes = export_report_to_csv(report)
+                            st.download_button(
+                                label="📊 Export CSV",
+                                data=csv_bytes,
+                                file_name=f"report_{report.get('trading_date', 'unknown')}.csv",
+                                mime="text/csv",
+                                key=f"csv_{report.get('trading_date')}"
+                            )
+                        except Exception as e:
+                            logger.error("CSV export failed: %s", str(e))
+                    
+                    with action_col3:
+                        # Audio player if available
+                        audio_gcs_path = report.get('audio_gcs_path')
+                        if audio_gcs_path:
+                            if st.button("🔊 Play Audio", key=f"audio_{report.get('trading_date')}"):
+                                render_audio_player("", audio_gcs_path)
+                        else:
+                            st.info("No audio available")
         
         except ImportError:
-            st.error("Unable to load report repository. Check Firestore configuration.")
+            from utils.user_messages import get_user_friendly_message
+            st.error(get_user_friendly_message("database_connection_failed"))
         except Exception as e:
             logger.error("Error loading report history: %s", str(e), exc_info=True)
-            st.error(f"Error loading report history: {str(e)}")
+            from utils.user_messages import get_user_friendly_message
+            st.error(get_user_friendly_message("report_not_found"))
     
     with history_tab2:
         # Bookmarks tab
@@ -1605,7 +1439,8 @@ def render_report_history_tab() -> None:
             from python_app.components.report_viewer import render_bookmark_management
             render_bookmark_management(DEFAULT_CLIENT_ID)
         except Exception as e:
-            st.error(f"Failed to load bookmarks: {str(e)}")
+            from utils.user_messages import get_user_friendly_message
+            st.error(get_user_friendly_message("bookmark_failed"))
     
     with history_tab3:
         # Compare Reports tab
@@ -1639,12 +1474,103 @@ def render_report_history_tab() -> None:
                         DEFAULT_CLIENT_ID
                     )
         except Exception as e:
-            st.error(f"Failed to load comparison: {str(e)}")
+            from utils.user_messages import get_user_friendly_message
+            st.error(get_user_friendly_message("comparison_failed"))
 
 
 def render_ai_chat_tab() -> None:
     """Render the AI Chat tab."""
     render_chat_ui()
+
+
+def render_alerts_tab() -> None:
+    """Render the Alerts management tab."""
+    st.header("🔔 Email Alerts")
+    st.caption("Get notified via Email when tickers hit your price targets.")
+    
+    # Initialize service
+    alert_service = AlertService()
+    user = get_current_user()
+    user_id = user.get('email', 'default_user') if user else 'default_user'
+    user_email_default = user.get('email', '') if user else ''
+    
+    # 1. Create Alert Form
+    with st.expander("Create New Alert", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            ticker = st.selectbox("Ticker", options=st.session_state.watchlist)
+        with col2:
+            condition = st.selectbox(
+                "Condition", 
+                options=[c.value for c in ConditionType],
+                format_func=lambda x: x.replace('_', ' ').title()
+            )
+        with col3:
+            value = st.number_input("Target Value", value=100.0)
+            
+        email = st.text_input("Email Address", value=user_email_default)
+        
+        if st.button("Create Alert", type="primary"):
+            if not email:
+                st.error("Email address is required.")
+            else:
+                alert_service.create_alert(
+                    user_id=user_id,
+                    ticker=ticker,
+                    condition=ConditionType(condition),
+                    value=value,
+                    email=email
+                )
+                st.success(f"Alert created for {ticker}!")
+                st.rerun()
+
+    st.divider()
+
+    # 2. List Alerts
+    st.subheader("Your Active Alerts")
+    alerts = alert_service.get_user_alerts(user_id)
+    
+    if alerts:
+        for alert in alerts:
+            col1, col2, col3, col4, col5 = st.columns([1, 2, 2, 2, 1])
+            with col1:
+                st.write(f"**{alert.ticker}**")
+            with col2:
+                st.write(f"{alert.condition_type.replace('_', ' ').title()}")
+            with col3:
+                st.write(f"Target: {alert.target_value}")
+            with col4:
+                st.write(f"Last Trig: {alert.last_triggered or 'Never'}")
+            with col5:
+                if st.button("🗑️", key=f"del_{alert.id}"):
+                    if alert_service.delete_alert(alert.id):
+                        st.success("Deleted")
+                        st.rerun()
+    else:
+        st.info("No active alerts.")
+
+    st.divider()
+    
+    # 3. Manual Test Trigger
+    st.subheader("Debug / Test")
+    if st.button("Check Alerts Now"):
+        with st.spinner("Fetching market data and checking conditions..."):
+            # Fetch data for all tickers in alerts
+            # For simplicity, fetch for watchlist + unique alert tickers?
+            # Or just fetch for watchlist if alerts are usually subsets of watchlist
+            unique_tickers = list(set([a.ticker for a in alerts]))
+            if not unique_tickers:
+                st.warning("No alerts to check.")
+                return
+                
+            df = fetch_watchlist_intraday_data(unique_tickers, date.today())
+            triggered_ids = alert_service.check_market_data(df)
+            
+            if triggered_ids:
+                st.success(f"Triggered {len(triggered_ids)} alerts! Check your email.")
+                st.rerun()
+            else:
+                st.info("No alerts triggered based on current data.")
 
 
 def main() -> None:
@@ -1660,34 +1586,60 @@ def main() -> None:
         logger.warning("Configuration validation failed: %s", str(e))
         # Continue anyway - some features may not work
     
-    init_session_state()
+    # Check if we're in development mode
+    from config import get_config
+    app_config = get_config()
+    is_development = app_config.show_developer_tools
+    
+    # Authentication (skip in development mode for easier testing)
+    if not is_development:
+        try:
+            handle_auth()
+            # Get user info and set client_id for this session
+            user = get_current_user()
+            if user:
+                session_client_id = user.get('email', DEFAULT_CLIENT_ID)
+            else:
+                session_client_id = DEFAULT_CLIENT_ID
+        except Exception as e:
+            logger.warning("Authentication failed, using default client: %s", str(e))
+            session_client_id = DEFAULT_CLIENT_ID
+    else:
+        # Development mode: skip authentication
+        session_client_id = DEFAULT_CLIENT_ID
+    
+    init_session_state(client_id=session_client_id)
+    
+    # Auto-load active report on app launch
+    load_active_report_automatically()
     
     # Logo in sidebar (at the top) - DISABLED
     # render_logo()
     
-    # Status indicators in sidebar
+    # Status indicators in sidebar (only in development)
     with st.sidebar.container():
-        render_status_indicators(show_in_sidebar=True)
-        st.sidebar.divider()
-        render_keyboard_shortcuts_help()
-        
-        # Notification settings
-        try:
-            from python_app.components.notifications import render_notification_settings
+        if is_development:
+            render_status_indicators(show_in_sidebar=True)
             st.sidebar.divider()
-            render_notification_settings()
-        except Exception:
-            pass  # Notifications are optional
+            render_keyboard_shortcuts_help()
+            
+            # Notification settings
+            try:
+                from python_app.components.notifications import render_notification_settings
+                st.sidebar.divider()
+                render_notification_settings()
+            except Exception:
+                pass  # Notifications are optional
     
     st.title("Brooks Data Center Daily Briefing")
     
-    tab_dashboard, tab_report, tab_history, tab_chat, tab_help = st.tabs(
-        ["Dashboard", "Daily Watchlist Report", "Report History", "AI Chat", "Help"]
+    tab_dashboard, tab_report, tab_history, tab_chat, tab_alerts, tab_help = st.tabs(
+        ["Dashboard", "Daily Watchlist Report", "Report History", "AI Chat", "🔔 Alerts", "Help"]
     )
     
     with tab_dashboard:
         firestore_client = get_firestore_client()
-        render_dashboard(firestore_client, DEFAULT_CLIENT_ID)
+        render_dashboard(firestore_client, st.session_state.get('client_id', DEFAULT_CLIENT_ID))
     
     with tab_report:
         render_watchlist_report_tab()
@@ -1698,17 +1650,29 @@ def main() -> None:
     with tab_chat:
         render_ai_chat_tab()
     
+    with tab_alerts:
+        render_alerts_tab()
+    
     with tab_help:
         try:
             from python_app.components.help_center import render_help_center
             render_help_center()
         except Exception as e:
-            st.error(f"Failed to load help center: {str(e)}")
+            from utils.user_messages import get_user_friendly_message
+            st.error(get_user_friendly_message("help_center_failed"))
     
     # Watchlist in sidebar (always visible)
     render_watchlist()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        st.error(f"Application error: {str(e)}")
+        if os.getenv("ENVIRONMENT", "production").lower() == "development":
+            st.exception(e)
+        logger.exception("Fatal error in main()")
+        st.stop()
 

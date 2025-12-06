@@ -1,5 +1,5 @@
 # Setup Cloud Scheduler job for daily watchlist report generation (PowerShell version)
-# This creates a scheduled job that triggers the API endpoint at 3:00 AM PST
+# This creates a scheduled job that triggers the API endpoint at 3:55 AM PST/PDT
 
 $ErrorActionPreference = "Stop"
 
@@ -70,8 +70,8 @@ $jobExists = gcloud scheduler jobs describe $SCHEDULER_JOB --location $REGION --
 # Prepare the request body
 $REQUEST_BODY = '{"client_id":"michael_brooks","watchlist":["IREN","CRWV","NBIS","MRVL"]}'
 
-# Schedule: 3:00 AM PST/PDT (America/Los_Angeles)
-$SCHEDULE = "0 3 * * *"
+# Schedule: 3:55 AM PST/PDT (America/Los_Angeles)
+$SCHEDULE = "55 3 * * *"
 $TIMEZONE = "America/Los_Angeles"
 
 $ENDPOINT_URL = "${API_URL}/reports/generate/watchlist"

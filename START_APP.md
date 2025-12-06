@@ -63,15 +63,15 @@ You should see output like:
 ```
   VITE v6.2.0  ready in 500 ms
 
-  ➜  Local:   http://localhost:3000/
-  ➜  Network: http://192.168.x.x:3000/
+  ➜  Local:   http://localhost:8080/
+  ➜  Network: http://192.168.x.x:8080/
 ```
 
 ## Step 4: Open in Browser
 
-Once you see "Local: http://localhost:3000/", open your browser and go to:
+Once you see "Local: http://localhost:8080/", open your browser and go to:
 ```
-http://localhost:3000
+http://localhost:8080
 ```
 
 The app should now load!
@@ -83,8 +83,8 @@ The app should now load!
 - Restart your terminal after installing Node.js
 - Or restart your computer
 
-### "Port 3000 is already in use"
-- Another application is using port 3000
+### "Port 8080 is already in use"
+- Another application is using port 8080 (may be Streamlit backend)
 - Either stop that application or change the port in `vite.config.ts`
 
 ### "Cannot find module"
@@ -102,7 +102,7 @@ The app should now load!
 - [ ] npm installed (check with `npm --version`)
 - [ ] Dependencies installed (`npm install`)
 - [ ] Dev server running (`npm run dev`)
-- [ ] Browser open to `http://localhost:3000`
+- [ ] Browser open to `http://localhost:8080`
 
 ## Alternative: Use the Python Version
 

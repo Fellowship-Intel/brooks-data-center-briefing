@@ -45,11 +45,11 @@
    ```bash
    npm run dev
    ```
-   Should see: `Local: http://localhost:3000/`
+   Should see: `Local: http://localhost:8080/`
 
-2. **Check port 3000 is available:**
-   - Another app might be using port 3000
-   - Vite will try the next available port if 3000 is taken
+2. **Check port 8080 is available:**
+   - Another app might be using port 8080 (e.g., Streamlit backend)
+   - Vite will try the next available port if 8080 is taken
    - Check the terminal output for the actual port
 
 3. **Clear browser cache:**
@@ -125,20 +125,21 @@
 ### Error: Port Already in Use
 
 **Symptoms:**
-- Terminal shows: "Port 3000 is in use"
+- Terminal shows: "Port 8080 is in use"
 - Server won't start
 
 **Solutions:**
 1. **Find and kill the process:**
    ```powershell
    # Windows PowerShell
-   netstat -ano | findstr :3000
+   netstat -ano | findstr :8080
    taskkill /PID <PID> /F
    ```
+   Note: If Streamlit backend is using port 8080, stop it first or run on different port
 
 2. **Use a different port:**
    - Edit `vite.config.ts`
-   - Change `port: 3000` to another port (e.g., `port: 3001`)
+   - Change `port: 8080` to another port (e.g., `port: 3000`)
 
 ### Error: TypeScript Errors
 

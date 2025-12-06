@@ -58,3 +58,29 @@ export interface ChatMessage {
   role: 'user' | 'model';
   text: string;
 }
+
+/**
+ * Union type for error handling throughout the application
+ * Covers various error formats from different sources (API, network, etc.)
+ */
+export type AppError = 
+  | Error 
+  | { message: string; name?: string; stack?: string }
+  | { detail?: string; message?: string }
+  | unknown;
+
+/**
+ * Helper function to extract error message from AppError
+ */
+export function getErrorMessage(error: AppError): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  
+  if (typeof error === 'object' && error !== null) {
+    const err = error as { message?: string; detail?: string };
+    return err.message || err.detail || 'An unknown error occurred';
+  }
+  
+  return 'An unknown error occurred';
+}

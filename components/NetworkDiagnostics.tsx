@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Wifi, WifiOff, RefreshCw } from 'lucide-react';
+import { AppError, getErrorMessage } from '../types';
 
 interface NetworkDiagnosticsProps {
   apiUrl?: string;
@@ -53,17 +54,20 @@ export const NetworkDiagnostics: React.FC<NetworkDiagnosticsProps> = ({
         setLastError(`Server returned ${response.status}: ${response.statusText}`);
         onStatusChange?.(false);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       setStatus('disconnected');
       
-      if (error.name === 'AbortError') {
+      const err = error as AppError;
+      const errorMessage = getErrorMessage(err);
+      
+      if (err instanceof Error && err.name === 'AbortError') {
         setLastError('Connection timeout - server may be slow or unreachable');
-      } else if (error.message?.includes('Failed to fetch') || error.message?.includes('NetworkError')) {
+      } else if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
         setLastError('Network error - check if backend is running on ' + url);
-      } else if (error.message?.includes('CORS')) {
+      } else if (errorMessage.includes('CORS')) {
         setLastError('CORS error - backend may not be configured to allow requests from this origin');
       } else {
-        setLastError(error.message || 'Unknown error occurred');
+        setLastError(errorMessage || 'Unknown error occurred');
       }
       
       onStatusChange?.(false);

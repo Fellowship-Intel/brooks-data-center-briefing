@@ -61,7 +61,7 @@ def create_or_update_secret(secret_id: str, secret_value: str) -> None:
 
 if __name__ == "__main__":
     # Gemini API Key
-    gemini_api_key = "AIzaSyC1B3wcMFM6Go6ujzAcg6fQK6d2NI8rlEs"
+    gemini_api_key = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY")
     
     print("Adding Gemini API Key to Secret Manager...")
     print("=" * 60)

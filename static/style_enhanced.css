@@ -1,0 +1,426 @@
+/* Base styling with improved text rendering */
+html, body, [class*="css"] {
+    font-size: 16pt !important;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 
+                 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+}
+
+/* Main container - optimized for desktop/larger screens */
+.main .block-container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+    max-width: 1600px;  /* Increased from 1400px for better desktop experience */
+    padding-left: 3rem;
+    padding-right: 3rem;
+}
+/* Mobile-specific optimizations */
+@media (max-width: 768px) {
+    html, body, [class*="css"] {
+        font-size: 14px !important;
+    }
+    
+    .main .block-container {
+        padding-top: 1rem !important;
+        padding-bottom: 1rem !important;
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+        max-width: 100% !important;
+    }
+    
+    h1 { font-size: 1.8rem !important; }
+    h2 { font-size: 1.5rem !important; }
+    h3 { font-size: 1.25rem !important; }
+    
+    /* Stack columns on mobile */
+    [data-testid="column"] {
+        width: 100% !important;
+        flex: 1 1 auto !important;
+        min-width: 100% !important;
+    }
+    
+    /* Make buttons full width for easier tapping */
+    .stButton > button {
+        width: 100% !important;
+        margin-bottom: 0.5rem !important;
+        padding: 0.75rem !important; /* Larger touch target */
+    }
+    
+    /* Metrics grid */
+    [data-testid="stMetricValue"] {
+        font-size: 1.5rem !important;
+    }
+}
+
+/* Desktop-specific optimizations */
+@media (min-width: 1200px) {
+    .main .block-container {
+        max-width: 1800px;
+        padding-left: 4rem;
+        padding-right: 4rem;
+    }
+    
+    /* Wider columns for desktop */
+    .stColumns {
+        gap: 2rem !important;
+    }
+    
+    /* Larger dataframes on desktop */
+    .stDataFrame {
+        font-size: 0.95rem !important;
+    }
+    
+    /* Better spacing for desktop */
+    .element-container {
+        margin-bottom: 1.5rem !important;
+    }
+}
+
+/* App background */
+.stApp {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    color: #f1f5f9;
+}
+
+/* Headers with vibrant colors and improved clarity */
+h1, h2, h3, h4, h5, h6 {
+    color: #10b981 !important;
+    font-weight: 700 !important;
+    margin-top: 1.5rem;
+    margin-bottom: 1rem;
+    text-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+    letter-spacing: -0.02em;
+}
+
+h1 {
+    font-size: 2.5rem;
+    border-bottom: 3px solid #10b981;
+    padding-bottom: 0.5rem;
+    background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    border-image: linear-gradient(135deg, #10b981 0%, #34d399 100%) 1;
+}
+
+h2 {
+    font-size: 2rem;
+    color: #34d399 !important;
+}
+
+h3 {
+    font-size: 1.5rem;
+    color: #6ee7b7 !important;
+}
+
+/* Text inputs with vibrant focus states */
+.stTextInput > div > div > input {
+    background-color: #1e293b !important;
+    color: #f1f5f9 !important;
+    border: 2px solid #334155 !important;
+    border-radius: 0.5rem !important;
+    padding: 0.5rem !important;
+    font-weight: 500 !important;
+}
+
+.stTextInput > div > div > input:focus {
+    border-color: #10b981 !important;
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.3), 0 0 20px rgba(16, 185, 129, 0.2) !important;
+    outline: none !important;
+}
+
+/* Text areas with vibrant focus states */
+.stTextArea > div > div > textarea {
+    background-color: #1e293b !important;
+    color: #f1f5f9 !important;
+    border: 2px solid #334155 !important;
+    border-radius: 0.5rem !important;
+    font-weight: 500 !important;
+}
+
+.stTextArea > div > div > textarea:focus {
+    border-color: #10b981 !important;
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.3), 0 0 20px rgba(16, 185, 129, 0.2) !important;
+    outline: none !important;
+}
+
+/* Select boxes */
+.stSelectbox > div > div > select {
+    background-color: #1e293b !important;
+    color: #f1f5f9 !important;
+    border: 1px solid #334155 !important;
+    border-radius: 0.5rem !important;
+}
+
+/* Buttons with vibrant colors and glow effects */
+.stButton > button {
+    background: linear-gradient(135deg, #10b981 0%, #34d399 100%) !important;
+    color: #0f172a !important;
+    border: none !important;
+    border-radius: 0.5rem !important;
+    padding: 0.5rem 1.5rem !important;
+    font-weight: 700 !important;
+    transition: all 0.3s ease !important;
+    box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4) !important;
+    text-shadow: none !important;
+}
+
+.stButton > button:hover {
+    background: linear-gradient(135deg, #059669 0%, #10b981 100%) !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 20px rgba(16, 185, 129, 0.6) !important;
+}
+
+/* Date input */
+.stDateInput > div > div > input {
+    background-color: #1e293b !important;
+    color: #f1f5f9 !important;
+    border: 1px solid #334155 !important;
+    border-radius: 0.5rem !important;
+}
+
+/* Sidebar */
+.css-1d391kg {
+    background-color: #1e293b !important;
+}
+
+/* Logo styling - clean and prominent */
+.stSidebar img {
+    max-width: 100% !important;
+    height: auto !important;
+    margin: 0 auto !important;
+    display: block !important;
+    border-radius: 0.75rem !important;
+    filter: drop-shadow(0 4px 12px rgba(16, 185, 129, 0.3));
+    transition: all 0.3s ease !important;
+}
+
+.stSidebar img:hover {
+    filter: drop-shadow(0 6px 20px rgba(16, 185, 129, 0.5));
+    transform: scale(1.02);
+}
+
+.stSidebar [data-testid="stImage"] {
+    padding: 0 !important;
+    margin: 0 auto !important;
+    background: transparent !important;
+}
+
+/* Logo container styling - clean transparent background */
+.stSidebar [data-testid="stMarkdownContainer"]:has(img) {
+    background-color: transparent !important;
+    padding: 0.5rem 0 !important;
+}
+
+/* Metrics with vibrant colors */
+[data-testid="stMetricValue"] {
+    background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-size: 2rem !important;
+    font-weight: 800 !important;
+    text-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
+}
+
+[data-testid="stMetricLabel"] {
+    color: #cbd5e1 !important;
+    font-weight: 600 !important;
+}
+
+/* Dataframes - enhanced for desktop */
+.stDataFrame {
+    background-color: #1e293b !important;
+    border-radius: 0.5rem !important;
+    overflow-x: auto !important;
+}
+
+/* Better table display on desktop */
+@media (min-width: 1200px) {
+    .stDataFrame table {
+        width: 100% !important;
+    }
+    
+    .stDataFrame th,
+    .stDataFrame td {
+        padding: 0.75rem 1rem !important;
+    }
+}
+
+/* Tabs with vibrant colors - enhanced for desktop */
+.stTabs [data-baseweb="tab-list"] {
+    background-color: #1e293b !important;
+    border-radius: 0.5rem !important;
+    padding: 0.25rem !important;
+    margin-bottom: 1.5rem !important;
+}
+
+.stTabs [data-baseweb="tab"] {
+    color: #94a3b8 !important;
+    font-weight: 600 !important;
+    transition: all 0.3s ease !important;
+    padding: 0.75rem 1.5rem !important;
+    font-size: 1rem !important;
+}
+
+.stTabs [data-baseweb="tab"]:hover {
+    color: #cbd5e1 !important;
+    background-color: rgba(51, 65, 85, 0.3) !important;
+}
+
+.stTabs [aria-selected="true"] {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(52, 211, 153, 0.1) 100%) !important;
+    color: #34d399 !important;
+    border-bottom: 3px solid #10b981 !important;
+    font-weight: 700 !important;
+    text-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+}
+
+/* Desktop tab enhancements */
+@media (min-width: 1200px) {
+    .stTabs [data-baseweb="tab"] {
+        padding: 1rem 2rem !important;
+        font-size: 1.1rem !important;
+    }
+}
+
+/* Expander */
+.streamlit-expanderHeader {
+    background-color: #1e293b !important;
+    color: #f1f5f9 !important;
+    border-radius: 0.5rem !important;
+}
+
+/* Code blocks */
+code {
+    background-color: #1e293b !important;
+    color: #10b981 !important;
+    padding: 0.2rem 0.4rem !important;
+    border-radius: 0.25rem !important;
+}
+
+pre {
+    background-color: #1e293b !important;
+    border: 1px solid #334155 !important;
+    border-radius: 0.5rem !important;
+    padding: 1rem !important;
+}
+
+/* Markdown with improved readability */
+.stMarkdown {
+    color: #f1f5f9 !important;
+    line-height: 1.7 !important;
+    font-weight: 400 !important;
+}
+
+.stMarkdown strong {
+    color: #34d399 !important;
+    font-weight: 700 !important;
+    text-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
+}
+
+.stMarkdown p {
+    color: #e2e8f0 !important;
+    margin-bottom: 1rem !important;
+}
+
+.stMarkdown li {
+    color: #e2e8f0 !important;
+    margin-bottom: 0.5rem !important;
+}
+
+/* Success/Info/Error boxes with vibrant colors */
+.stSuccess {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(52, 211, 153, 0.1) 100%) !important;
+    border-left: 4px solid #10b981 !important;
+    border-radius: 0.5rem !important;
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2) !important;
+    color: #d1fae5 !important;
+}
+
+.stInfo {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.15) 0%, rgba(96, 165, 250, 0.1) 100%) !important;
+    border-left: 4px solid #3b82f6 !important;
+    border-radius: 0.5rem !important;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2) !important;
+    color: #dbeafe !important;
+}
+
+.stError {
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.15) 0%, rgba(248, 113, 113, 0.1) 100%) !important;
+    border-left: 4px solid #ef4444 !important;
+    border-radius: 0.5rem !important;
+    box-shadow: 0 2px 8px rgba(239, 68, 68, 0.2) !important;
+    color: #fee2e2 !important;
+}
+
+/* Spinner */
+.stSpinner > div {
+    border-color: #10b981 !important;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: #0f172a;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #475569;
+}
+
+/* Cards/Containers */
+.element-container {
+    background-color: rgba(30, 41, 59, 0.5) !important;
+    border-radius: 0.75rem !important;
+    padding: 1rem !important;
+    margin-bottom: 1rem !important;
+    border: 1px solid rgba(51, 65, 85, 0.5) !important;
+}
+
+/* Links with vibrant colors */
+a {
+    color: #34d399 !important;
+    text-decoration: none !important;
+    font-weight: 600 !important;
+    transition: all 0.2s ease !important;
+}
+
+a:hover {
+    color: #10b981 !important;
+    text-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+    text-decoration: underline !important;
+}
+
+/* Chat messages styling */
+.stChatMessage {
+    padding: 1rem !important;
+    border-radius: 0.75rem !important;
+}
+
+/* Caption text */
+.stCaption {
+    color: #94a3b8 !important;
+    font-weight: 500 !important;
+}
+
+/* Sidebar text */
+.stSidebar .stMarkdown {
+    color: #e2e8f0 !important;
+}
+
+/* General text improvements */
+p, span, div {
+    color: #e2e8f0 !important;
+}

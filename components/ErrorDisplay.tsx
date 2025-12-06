@@ -55,7 +55,7 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({
             <h3 className={`${colors.text} font-semibold mb-1`}>{title}</h3>
           )}
           <p className={`${colors.text} text-sm`}>{message}</p>
-          {error && process.env.NODE_ENV === 'development' && (
+          {error && import.meta.env.DEV && (
             <details className="mt-2">
               <summary className={`${colors.text} text-xs cursor-pointer hover:underline`}>
                 Technical Details
